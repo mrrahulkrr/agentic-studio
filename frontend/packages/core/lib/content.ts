@@ -6,6 +6,7 @@
 //   GENRES          -> agents.py::GENRE_IDS
 //   MIN_SCRIPT_CHARS-> main.py::run_agent_endpoint (min_length)
 //   COUNTRY_NAMES   -> main.py::COUNTRY_DISPLAY_NAMES
+//   TIER_*          -> config.py::TIER_LABELS / TIER_MODELS / TIER_CANDIDATES
 
 import type { TaskType } from "@/lib/api";
 
@@ -53,6 +54,91 @@ export const MAX_UPLOAD_MB = 10;
 
 /** Backend allows this many requests per session per minute (resilience.py). */
 export const RATE_LIMIT = { requests: 10, windowSeconds: 60 };
+
+// ---- Model quality tiers ---------------------------------------------------
+// Mirrors config.py::TIER_MODELS / TIER_CANDIDATES / TIER_LABELS — same
+// models, same descriptions verbatim (including the deprecation flag on
+// every 2.5-series entry), used by two things: the developer app's Models
+// panel (a reference view, not a live control — see its own comment for
+// why) and lib/demo.ts's quota-exhausted fixture, so a walkthrough shows the
+// same wording a real rate-limit dialog would.
+//
+// This reflects what the app *ships* with, not necessarily what a given
+// deployment is actually running — FAST_MODEL/STANDARD_MODEL/QUALITY_MODEL
+// can each be overridden by their own env var, and there is no endpoint
+// this app calls to ask which value is live right now.
+
+export type ModelTier = "FAST" | "STANDARD" | "QUALITY";
+
+export const TIER_LABELS: Record<ModelTier, string> = {
+  FAST: "Quick checks",
+  STANDARD: "Everyday reports",
+  QUALITY: "Final judgment",
+};
+
+export const TIER_DEFAULT_MODELS: Record<ModelTier, string> = {
+  FAST: "gemini-3.5-flash-lite",
+  STANDARD: "gemini-3.5-flash",
+  QUALITY: "gemini-3.7-flash",
+};
+
+export interface TierCandidate {
+  model: string;
+  description: string;
+}
+
+export const TIER_CANDIDATES: Record<ModelTier, TierCandidate[]> = {
+  FAST: [
+    {
+      model: TIER_DEFAULT_MODELS.FAST,
+      description:
+        "Fastest and cheapest — best when you're running many quick checks, like sorting an uploaded document or scoring search results.",
+    },
+    {
+      model: "gemini-2.5-flash-lite",
+      description:
+        "An older, equally fast option — free today, but Google has flagged the whole 2.5 model family for shutdown around mid-October 2026, so treat this as a temporary fallback, not a long-term choice.",
+    },
+  ],
+  STANDARD: [
+    {
+      model: TIER_DEFAULT_MODELS.STANDARD,
+      description:
+        "Balanced speed and quality — the right choice for everyday reports and write-ups you'll read yourself.",
+    },
+    {
+      model: "gemini-3.6-flash",
+      description:
+        "A newer alternative, reportedly a bit more efficient at planning multi-step content than 3.5 Flash — worth trying if you want slightly sharper write-ups without moving to the slowest tier.",
+    },
+    {
+      model: "gemini-2.5-flash",
+      description:
+        "An older mid-tier option — free today, but part of the 2.5 family Google has flagged for shutdown around mid-October 2026; use only as a temporary fallback.",
+    },
+  ],
+  QUALITY: [
+    {
+      model: TIER_DEFAULT_MODELS.QUALITY,
+      description:
+        "The most capable free option available — slower, but best for the one decision in a run you most want to trust, like the final greenlight verdict.",
+    },
+    {
+      model: "gemini-2.5-pro",
+      description:
+        "Previously Google's top reasoning model — still free today, but scheduled for shutdown around mid-October 2026 per multiple reports; don't build a habit around it this close to its retirement.",
+    },
+  ],
+};
+
+/** Copy for the reactive rate-limit fallback dialog (ui.tsx::QuotaDialog). */
+export const QUOTA_DIALOG_COPY = {
+  title: "This model has hit today's usage limit",
+  stopHere: "Stop here",
+  retrying: "Trying again…",
+  ingestNote:
+    "Retrying this upload with a different model needs a developer to change it in the Models panel first — there is no one-click swap for this action.",
+} as const;
 
 export interface TaskInfo {
   value: TaskType;

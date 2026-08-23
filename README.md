@@ -6,16 +6,17 @@ A multi-agent AI platform for film & TV script evaluation, built with **FastAPI*
 
 ## ✨ Key Features
 
-| Feature | Description |
-|---|---|
-| **Greenlight Committee** | A LangGraph multi-agent graph where a Producer and Executive debate a script across up to 3 rounds. A deterministic Mediator issues the final RED / YELLOW / GREEN verdict. |
-| **Compliance Check** | RAG-based review that identifies content flagged against ingested studio guidelines. |
-| **Script Analysis** | Structural analysis (pacing, characters, logline) enriched with vector-searched comparable films. |
-| **Release Planning** | Browse upcoming releases by genre (TMDB API) and conflict-check a proposed date. |
-| **Calendar Integration** | Automatically creates localized release events in Google Calendar (via MCP or Service Account). |
-| **Faithfulness Evaluation** | Each agent run can be scored by an LLM judge (0–10) with reasoning, tracked over time. |
-| **Semantic Caching** | Identical queries hit a Postgres cache instead of re-running LLM calls. |
-| **Session Memory** | Conversation turns stored per session and replayed as context. |
+
+| Feature                     | Description                                                                                                                                                                 |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Greenlight Committee**    | A LangGraph multi-agent graph where a Producer and Executive debate a script across up to 3 rounds. A deterministic Mediator issues the final RED / YELLOW / GREEN verdict. |
+| **Compliance Check**        | RAG-based review that identifies content flagged against ingested studio guidelines.                                                                                        |
+| **Script Analysis**         | Structural analysis (pacing, characters, logline) enriched with vector-searched comparable films.                                                                           |
+| **Release Planning**        | Browse upcoming releases by genre (TMDB API) and conflict-check a proposed date.                                                                                            |
+| **Calendar Integration**    | Automatically creates localized release events in Google Calendar (via MCP or Service Account).                                                                             |
+| **Faithfulness Evaluation** | Each agent run can be scored by an LLM judge (0–10) with reasoning, tracked over time.                                                                                     |
+| **Semantic Caching**        | Identical queries hit a Postgres cache instead of re-running LLM calls.                                                                                                     |
+| **Session Memory**          | Conversation turns stored per session and replayed as context.                                                                                                              |
 
 ---
 
@@ -236,13 +237,13 @@ Result — JSON: { holidays: {...}, sporting_events: [...], awards_ceremonies: [
 
 ```bash
 cd backend
-python -m venv venv
+python -m venv .venv
 
 # Windows
-venv\Scripts\activate
+.venv\Scripts\activate
 
 # macOS/Linux
-source venv/bin/activate
+source .venv/bin/activate
 
 pip install -r requirements.txt
 ```
@@ -268,12 +269,14 @@ GOOGLE_SERVICE_ACCOUNT_JSON=path/to/service_account.json
 ### 2. Start the Services
 
 **Terminal 1 — Agent 4 (A2A Microservice):**
+
 ```bash
 python microservices/agent4_service.py
 # Starts on http://localhost:8001
 ```
 
 **Terminal 2 — Main API:**
+
 ```bash
 uvicorn app.main:app --port 8000
 # Starts on http://localhost:8000
@@ -317,39 +320,41 @@ Log in with the account from step 3. The client app gets the working pipelines; 
 
 ## 🧠 Backend API Reference
 
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| `GET` | `/health` | ❌ | Liveness check with DB status |
-| `POST` | `/run-agent` | ✅ | Run any agent task |
-| `GET` | `/result/{id}` | ❌ | Fetch a stored result |
-| `GET` | `/result/{id}/download` | ❌ | Download result as PDF |
-| `POST` | `/ingest` | ✅ | Upload a PDF to the RAG store |
-| `DELETE` | `/document` | ✅ | Delete a document by filename |
-| `GET` | `/history/{session_id}` | ❌ | Fetch conversation history |
-| `POST` | `/confirm-date/{id}` | ✅ | Confirm release date + create calendar events |
-| `POST` | `/override-date/{id}` | ✅ | Override date + create calendar events |
-| `POST` | `/check-conflicts/{id}` | ✅ | Check date conflicts via Agent 4 |
-| `POST` | `/finalize-calendar/{id}` | ✅ | Finalize with per-country date overrides |
-| `GET` | `/eval/summary` | ❌ | Evaluation score summary |
-| `GET` | `/eval/chart` | ❌ | Evaluation trend chart (base64 PNG) |
-| `POST` | `/auth/login` | ❌ | Sign in, sets the session cookie |
-| `POST` | `/auth/logout` | ❌ | Clear the session cookie |
-| `GET` | `/auth/me` | ❌\* | Who's currently logged in — \*needs a valid session cookie, just no `X-API-Key` |
-| `GET`/`POST` | `/auth/users` | 🧑‍💻 | List / create accounts |
-| `PATCH`/`DELETE` | `/auth/users/{id}` | 🧑‍💻 | Change role / remove an account |
-| `GET`/`POST`/`PATCH`/`DELETE` | `/admin/tables/*` | ✅ 🧑‍💻 | Generic browser over the 5 non-`users` tables |
+
+| Method                        | Endpoint                  | Auth      | Description                                                                     |
+| ----------------------------- | ------------------------- | --------- | ------------------------------------------------------------------------------- |
+| `GET`                         | `/health`                 | ❌        | Liveness check with DB status                                                   |
+| `POST`                        | `/run-agent`              | ✅        | Run any agent task                                                              |
+| `GET`                         | `/result/{id}`            | ❌        | Fetch a stored result                                                           |
+| `GET`                         | `/result/{id}/download`   | ❌        | Download result as PDF                                                          |
+| `POST`                        | `/ingest`                 | ✅        | Upload a PDF to the RAG store                                                   |
+| `DELETE`                      | `/document`               | ✅        | Delete a document by filename                                                   |
+| `GET`                         | `/history/{session_id}`   | ❌        | Fetch conversation history                                                      |
+| `POST`                        | `/confirm-date/{id}`      | ✅        | Confirm release date + create calendar events                                   |
+| `POST`                        | `/override-date/{id}`     | ✅        | Override date + create calendar events                                          |
+| `POST`                        | `/check-conflicts/{id}`   | ✅        | Check date conflicts via Agent 4                                                |
+| `POST`                        | `/finalize-calendar/{id}` | ✅        | Finalize with per-country date overrides                                        |
+| `GET`                         | `/eval/summary`           | ❌        | Evaluation score summary                                                        |
+| `GET`                         | `/eval/chart`             | ❌        | Evaluation trend chart (base64 PNG)                                             |
+| `POST`                        | `/auth/login`             | ❌        | Sign in, sets the session cookie                                                |
+| `POST`                        | `/auth/logout`            | ❌        | Clear the session cookie                                                        |
+| `GET`                         | `/auth/me`                | ❌\*      | Who's currently logged in —\*needs a valid session cookie, just no `X-API-Key` |
+| `GET`/`POST`                  | `/auth/users`             | 🧑‍💻    | List / create accounts                                                          |
+| `PATCH`/`DELETE`              | `/auth/users/{id}`        | 🧑‍💻    | Change role / remove an account                                                 |
+| `GET`/`POST`/`PATCH`/`DELETE` | `/admin/tables/*`         | ✅ 🧑‍💻 | Generic browser over the 5 non-`users` tables                                   |
 
 **Authentication:** Pass `X-API-Key: <your_key>` header for ✅ routes. 🧑‍💻 routes additionally need a logged-in session cookie with `role = "developer"` — get one via `/auth/login`. The two frontend apps never send `X-API-Key` from the browser at all; their own server-side proxy route does that for them (see Project Structure above).
 
 **Task types** (pass as `task` form field to `/run-agent`):
 
-| Value | Description |
-|---|---|
-| `compliance` | RAG compliance review against studio guidelines |
-| `analyze` | Structural script analysis with comparable films |
-| `release_listing` | Browse upcoming releases by genre via TMDB |
-| `release_check` | Conflict-check a proposed release date |
-| `greenlight` | Full Greenlight Committee multi-agent debate |
+
+| Value             | Description                                      |
+| ----------------- | ------------------------------------------------ |
+| `compliance`      | RAG compliance review against studio guidelines  |
+| `analyze`         | Structural script analysis with comparable films |
+| `release_listing` | Browse upcoming releases by genre via TMDB       |
+| `release_check`   | Conflict-check a proposed release date           |
+| `greenlight`      | Full Greenlight Committee multi-agent debate     |
 
 ---
 
@@ -357,22 +362,24 @@ Log in with the account from step 3. The client app gets the working pipelines; 
 
 **Client app** (`apps/client`, port 3000) — the working pipelines:
 
-| Panel | Description |
-|---|---|
-| **Agents** | Select a task, paste script text, run an agent, view results with optional faithfulness evaluation. Greenlight results render as a full "Boardroom Chat" UI with Digest, Producer Pitch, Executive Memo, and Studio Stamp. |
-| **Documents** | Upload PDFs to populate the RAG store or delete existing documents by filename |
-| **History** | Browse per-session conversation turns stored in Postgres |
-| **Insights** | View average faithfulness scores and the evaluation score trend chart over time |
-| **Release Planner** | The four-step release-date flow: propose a date, review conflicts, edit per-country dates, create calendar events |
-| **Start here** | What the tool does, plus four guided walkthroughs (one per pipeline) |
+
+| Panel               | Description                                                                                                                                                                                                                |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Agents**          | Select a task, paste script text, run an agent, view results with optional faithfulness evaluation. Greenlight results render as a full "Boardroom Chat" UI with Digest, Producer Pitch, Executive Memo, and Studio Stamp. |
+| **Documents**       | Upload PDFs to populate the RAG store or delete existing documents by filename                                                                                                                                             |
+| **History**         | Browse per-session conversation turns stored in Postgres                                                                                                                                                                   |
+| **Insights**        | View average faithfulness scores and the evaluation score trend chart over time                                                                                                                                            |
+| **Release Planner** | The four-step release-date flow: propose a date, review conflicts, edit per-country dates, create calendar events                                                                                                          |
+| **Start here**      | What the tool does, plus four guided walkthroughs (one per pipeline)                                                                                                                                                       |
 
 **Developer app** (`apps/admin`, port 3001) — everything above, plus:
 
-| Panel | Description |
-|---|---|
-| **Database** | Visual browser/editor over the five non-`users` tables, with structural-field warnings |
-| *(API Log)* | Not a tab — a toggle in the header. Technical request/response drawer, method/path/status/payload per call |
-| **Users** | Create accounts, change role (`developer`/`client`), remove access |
+
+| Panel        | Description                                                                                                 |
+| ------------ | ----------------------------------------------------------------------------------------------------------- |
+| **Database** | Visual browser/editor over the five non-`users` tables, with structural-field warnings                      |
+| *(API Log)*  | Not a tab — a toggle in the header. Technical request/response drawer, method/path/status/payload per call |
+| **Users**    | Create accounts, change role (`developer`/`client`), remove access                                          |
 
 Both apps sit behind a login screen; the developer app additionally refuses (with a plain explanation, not a raw error) any account that isn't `role = "developer"`.
 

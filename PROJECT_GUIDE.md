@@ -14,7 +14,7 @@ The frontend is now **two** separate Next.js apps instead of one, and the backen
 - **`frontend/` restructured**: `packages/core` (shared code, not an npm package — see `frontend/packages/core/README.md`) plus `apps/client` (the working pipelines) and `apps/admin` (client's tabs + Database + API Log + Users). Both gate on login via `useSession()`; the admin app additionally checks `role === "developer"`.
 - **The API key no longer reaches the browser.** Both apps proxy every backend call through their own `app/api/proxy/[...path]/route.ts`, which attaches `X-API-Key` server-side from a non-public `BACKEND_API_KEY` env var. `NEXT_PUBLIC_API_KEY`/`NEXT_PUBLIC_API_URL` are gone from the codebase, replaced by `BACKEND_API_KEY`/`BACKEND_API_URL`.
 - **First account**: `python backend/seed_admin.py you@studio.com` — there is no signup page; every account after the first comes from the developer app's Users tab.
-- Checks: `python backend/test_auth.py` (11 checks — password hashing, session token roundtrip/tamper, role-gate 401/403/pass including DB-recheck-on-downgrade and deleted-account cases), alongside the two pre-existing backend suites and the frontend's `demo.test.ts` (now run from `frontend/packages/core`).
+- Checks: `tests/backend/test_auth.py` (11 checks — password hashing, session token roundtrip/tamper, role-gate 401/403/pass including DB-recheck-on-downgrade and deleted-account cases), alongside the two pre-existing backend suites and the frontend's `demo.test.ts`. **Update, August 2026**: every test file in the repo (11 backend, 1 frontend) now lives under the root-level `tests/` directory (`tests/backend/`, `tests/frontend/`), not scattered inside `backend/`/`frontend/`. See [`tests/TESTING_GUIDE.md`](tests/TESTING_GUIDE.md) for how to run them and [`tests/TEST_PLAN.md`](tests/TEST_PLAN.md) for what each one covers.
 
 Everything below this point that says "the frontend" in the singular predates this split — read it as describing shared behavior both apps still have, and check the two bullet points above (auth endpoints, two apps) for what's actually different. The [Folder and File Structure](#folder-and-file-structure), [API endpoints](#api-endpoints), and [Client-side features](#client-side-features) sections have been updated in place; the rest has not been re-audited against this change line by line.
 
@@ -44,7 +44,7 @@ None of that came from changing the AI. The logic was already 0.025 ms; the time
 
 - Dead code deleted — see [Dead code](#dead-code-removed-august-2026). Requires a manual `ALTER TABLE` on existing databases.
 - Frontend rewritten for first-time users: a "Start here" tab, a guided four-step Release Planner replacing the hidden result-ID handoff, and per-task explanations of what each agent needs and returns. Split from one 980-line `page.tsx` into `components/` plus `lib/content.ts`.
-- First tests in the repo: `test_release_conflicts.py`, 15 checks, no framework needed.
+- First tests in the repo: `test_release_conflicts.py`, 15 checks, no framework needed. (Now at `tests/backend/test_release_conflicts.py` — see the August 2026 tests/ reorganization note above.)
 
 **Frontend features added on top of `lib/api.ts`**
 
@@ -57,7 +57,7 @@ Every backend call already went through one `request<T>` helper, so all four of 
 | **Activity feed** | `lib/activity.ts`, `components/ActivityFeed.tsx` | Transient plain-language narration — "Searching the guidelines you uploaded…" → "Compliance report ready." Outcome lines are computed from the real response. |
 | **API log** | `lib/apilog.ts`, `components/ApiLogPanel.tsx` | Technical drawer: method, endpoint, payload, status, response, per call. Demo calls included and flagged `simulated`. The API key is masked everywhere it could print. |
 
-- Second test file, first on the frontend: `frontend/lib/demo.test.ts`, run with bare `node`.
+- Second test file, first on the frontend: `frontend/lib/demo.test.ts`, run with bare `node`. (Now at `tests/frontend/demo.test.ts`.)
 
 **Known-unfixed** issues are listed in `ARCHITECTURE.md` under Known limitations — most importantly `bm25_search` rebuilding its index from every row on every query, and `ingest.py` classifying per chunk rather than per document.
 
@@ -120,7 +120,7 @@ Two independent installs now, `frontend/apps/client/package.json` and `frontend/
 - `tailwindcss` `^4` via `@tailwindcss/postcss`
 - `typescript` `^5`, `eslint` `^9` + `eslint-config-next`
 
-No test runner and no charting, diagramming, tour or toast library. `frontend/packages/core/lib/demo.test.ts` runs under bare `node` (≥ 22.6, which strips TypeScript types natively) from `frontend/packages/core`; the walkthrough visuals and the activity feed are plain JSX and Tailwind; the API log's collapsible rows are native `<details>`.
+No test runner and no charting, diagramming, tour or toast library. `tests/frontend/demo.test.ts` runs under bare `node` (≥ 22.6, which strips TypeScript types natively) from `tests/frontend/`; the walkthrough visuals and the activity feed are plain JSX and Tailwind; the API log's collapsible rows are native `<details>`.
 
 ### External services
 
@@ -227,7 +227,7 @@ Every credential and external account required, with the file that reads it:
 | Google OAuth desktop credentials | file `gcp-credentials.json` at project root (path built in `calendar_mcp.py:10`) | `calendar_mcp.py` | `CALENDAR_MODE=mcp` only |
 | Node.js / `npx` | — | `calendar_mcp.py:15` spawns `npx -y @cocal/google-calendar-mcp` | `CALENDAR_MODE=mcp` only |
 | Node.js ≥ whatever Next 16 requires | `frontend/apps/client/package.json`, `frontend/apps/admin/package.json` | — | Both frontend apps, each its own install. Exact minimum: **Unknown / not found in codebase** |
-| Node.js ≥ 22.6 | — | — | `frontend/packages/core/lib/demo.test.ts` only — it is TypeScript run directly, which needs native type stripping. Neither app itself requires this |
+| Node.js ≥ 22.6 | — | — | `tests/frontend/demo.test.ts` only — it is TypeScript run directly, which needs native type stripping. Neither app itself requires this |
 
 Notes grounded in code:
 
@@ -636,13 +636,17 @@ agentic-studio/
 ├── CLAUDE.md                       Guidance for Claude Code — commands, architecture, conventions
 ├── PROJECT_GUIDE.md                This file
 ├── README.md                       Top-level overview
+├── tests/
+│   ├── TEST_PLAN.md                 Risk rationale + coverage map for the whole suite
+│   ├── TESTING_GUIDE.md             Step-by-step: how to run, read, and extend the suite
+│   ├── backend/                     11 files, 117 checks — see TEST_PLAN.md for the per-file breakdown
+│   └── frontend/
+│       └── demo.test.ts             Demo Mode, walkthroughs, activity narration, API-key masking
+├── run_tests.sh                     Runs everything under tests/ + per-app lint/tsc/build
 ├── backend/
 │   ├── ARCHITECTURE.md             Design document: per-file responsibilities, known limitations
 │   ├── requirements.txt            Pinned Python deps
 │   ├── seed_admin.py               One-time CLI: create the first developer account
-│   ├── test_release_conflicts.py   15 checks: release-date logic, retrieval confidence gate
-│   ├── test_admin_tables.py        17 checks: admin registry, structural marking, identifier safety
-│   ├── test_auth.py                11 checks: password hashing, session token, role gate
 │   ├── app/
 │   │   ├── main.py                 FastAPI app: every HTTP route, CORS, date-scheduling orchestration
 │   │   ├── schemas.py              TaskType enum, AgentResponse, EvalResult pydantic models
@@ -677,8 +681,7 @@ agentic-studio/
     │   │   ├── activity.ts         Activity-feed store + describeRequest()
     │   │   ├── apilog.ts           API-log ring buffer + maskSecrets()
     │   │   ├── session.ts          useSession() — the login/role gate hook, demo-aware
-    │   │   ├── proxy.ts            The same-origin backend proxy both apps re-export
-    │   │   └── demo.test.ts        Frontend checks — `node lib/demo.test.ts`
+    │   │   └── proxy.ts            The same-origin backend proxy both apps re-export
     │   └── components/
     │       ├── GuidePanel.tsx      "Start here" tab + the four walkthrough launchers
     │       ├── AgentsPanel.tsx     compliance / analyze / release_listing / release_check / greenlight
@@ -732,42 +735,45 @@ ALTER TABLE eval_history DROP COLUMN context_precision_score;
 
 ### Tests
 
-`test_release_conflicts.py` — **15 checks, no test framework required**:
+**Update, August 2026**: every test file in the repo now lives under the root-level `tests/` directory, not scattered inside `backend/`/`frontend/`. This subsection is now a summary; the authoritative, actively-maintained detail lives in two files that ship with the suite:
+
+- [`tests/TESTING_GUIDE.md`](tests/TESTING_GUIDE.md) — step-by-step: prerequisites, how to run everything or one file, how to read a failure, how to write a new test, how it fits (or doesn't) into a workflow with no CI.
+- [`tests/TEST_PLAN.md`](tests/TEST_PLAN.md) — the risk rationale behind each file and a per-file coverage map.
+
+All checks are plain `assert` statements with a `__main__` runner — no test framework installed, nothing to `pip install` or `npm install` for the suite itself — and every backend file is written so `pytest` would collect it unchanged if pytest is ever added. Run everything from the repo root with:
 
 ```bash
-python test_release_conflicts.py
+./run_tests.sh              # backend + frontend unit + lint/tsc/build for both apps
+./run_tests.sh --unit       # backend + frontend unit only, skip lint/tsc/build
+./run_tests.sh --backend    # tests/backend/test_*.py only
+./run_tests.sh --frontend   # demo.test.ts + lint/tsc/build for both apps
 ```
 
-It uses plain `assert` statements and a `__main__` runner, so it needs nothing installed, but is written so `pytest` collects it unchanged if pytest is ever added.
+or a single file directly, e.g. `cd tests/backend && python test_admin_tables.py`, or `cd tests/frontend && node demo.test.ts`.
 
-Coverage: the listing parser (including titles containing parentheses, and undated films), the 14-day competition window at its inclusive boundary, signed day offsets, same-day releases, and all four `retrieval_status` states — in particular that an unscored result is not mistaken for an irrelevant one.
+**Backend — `tests/backend/`, 11 files, 117 checks total:**
 
-`test_admin_tables.py` — **17 checks, no framework required**:
+| File | Checks | Covers |
+|---|---|---|
+| `test_release_conflicts.py` | 15 | Listing parser, the 14-day competition window (inclusive boundary), signed day offsets, same-day releases, all four `retrieval_status` states |
+| `test_admin_tables.py` | 17 | Registry completeness, structural-column warnings, `documents` filename-group deletes, and — the one that matters most — `_safe()` refusing every identifier that isn't a plain identifier, since that's the only place a name is interpolated into SQL |
+| `test_auth.py` | 11 | Password hashing, session JWT roundtrip/tamper, `require_role`'s 401/403/pass paths including DB-recheck-on-downgrade and deleted-account cases |
+| `test_user_management.py` | 5 | `_refuse_if_last_developer` — the last-developer lockout guard |
+| `test_guardrails.py` | 15 | `check_query_safety`: length, injection phrases, profanity-with-direct-address toxicity |
+| `test_retrieval_pipeline.py` | 8 | Hybrid dense+BM25 blend math, and the reranker-failure bug class (never back-filling `rerank_score` from `hybrid_score`) |
+| `test_greenlight_committee.py` | 14 | The Greenlight debate graph's routing functions, stalemate/iteration-cap logic, A2A-failure-swallowed-to-`{}` behavior, RED/YELLOW/GREEN verdict rules |
+| `test_release_date_state_carrier.py` | 7 | The `"<date>|<listing_result_id>"` state-carrier split/parse contract, and `_nearest_clear_date`'s known one-shot-shift limitation |
+| `test_calendar_fallback.py` | 4 | `CALENDAR_MODE=mcp` → service-account silent fallback decision |
+| `test_agent4_conflicts.py` | 9 | Holiday lookups (external API, monkeypatched offline) and the hardcoded 2026–2028 sporting/awards windows |
+| `test_resilience.py` | 12 | In-process rate limiter, retry decorator, `safe_generate` fallback — shared state used by `/run-agent`, `/check-conflicts`, `/finalize-calendar`, `/auth/login` |
 
-```bash
-python test_admin_tables.py
-```
+Not covered anywhere, because it needs a live database/LLM/A2A service: `admin_columns` (reads `information_schema`), `_validate_writable`, and every statement that touches a real row or calls a real model.
 
-Covers the admin browser's validation layer: the registry is complete, an unregistered table is unreachable, the three documented invariants are marked structural, warnings fire only for structural columns, `documents` deletes by filename group and omits embeddings, and — the one that matters most — `_safe()` refuses every identifier that is not a plain identifier (`id; DROP TABLE results`, `a"b`, `id --`, `results.id`, …), since that is the only place a name is interpolated into SQL.
+**Frontend — `tests/frontend/demo.test.ts`:**
 
-Not covered, because they need a live database: `admin_columns` (reads `information_schema`), `_validate_writable`, and every statement that touches a real row.
+Node ≥ 22.6 strips TypeScript types natively, so this needs nothing installed either. Covers Demo Mode fixture completeness (every `lib/api.ts` path has one, an unrouted path rejects), the walkthrough store, activity-feed narration (including the internal-vocabulary regex), and API-key masking in the API log.
 
-`frontend/lib/demo.test.ts` — **the frontend checks, also framework-free**:
-
-```bash
-cd frontend && node lib/demo.test.ts
-```
-
-Node ≥ 22.6 strips the TypeScript types natively, so this needs nothing installed either. Two consequences worth knowing: `tsconfig.json` sets `allowImportingTsExtensions` (safe under `noEmit`) because the test imports `./demo.ts` with its extension, and `lib/activity.ts` imports `./content.ts` relatively rather than through the `@/` alias, which bare node cannot resolve.
-
-Coverage:
-
-- **Demo Mode** — every path `lib/api.ts` can call has a fixture; an unrouted path rejects; fixtures label themselves as demo data; the calendar fixture's links point at a day view rather than an event id; an override does not stick to the fixture; the document list is frozen.
-- **Walkthroughs** — starting one forces Demo Mode on; leaving Demo Mode ends it; restarting rewinds it; all four pipelines exist and no step is missing a visual aid or a `where` line.
-- **Activity feed** — the ten narrated routes produce the expected outcome line *when fed the real fixtures*; the health poll and the eval chart stay silent; a cache hit says so; no user-visible step contains internal vocabulary; a malformed body does not throw.
-- **API log** — the API key is masked in headers, payloads and response bodies; an entry settles once; the buffer caps at 50.
-
-Between them these are the only tests in the repo. The database, LLM, A2A, calendar and ingestion paths have no automated coverage, and no test exercises a React component — the checks cover the stores and the pure functions the components read.
+No test exercises a React component — the checks cover the stores and the pure functions the components read.
 
 ---
 
@@ -785,7 +791,7 @@ Demo Mode is on — the header toggle is amber. Switch it off to reach the real 
 The `where` text in `content.ts::WALKTHROUGHS` describes real screen positions and nothing enforces that it stays true. If a control moved in `AgentsPanel.tsx` or `ReleasePlanner.tsx`, that step's text needs updating by hand.
 
 **`Demo Mode has no fixture for POST /some-path.`**
-A new endpoint was added to `lib/api.ts` without a matching entry in `lib/demo.ts::ROUTES`. Deliberate: a silently empty response would be worse. Add the fixture; `node lib/demo.test.ts` will tell you if any path is still uncovered.
+A new endpoint was added to `lib/api.ts` without a matching entry in `lib/demo.ts::ROUTES`. Deliberate: a silently empty response would be worse. Add the fixture; `cd tests/frontend && node demo.test.ts` will tell you if any path is still uncovered.
 
 **All protected endpoints return `403 "Missing or invalid API key."`**
 `main.py::require_api_key` fails closed: if `API_SECRET_KEY` is unset on the server, *every* request is rejected regardless of what the client sends.

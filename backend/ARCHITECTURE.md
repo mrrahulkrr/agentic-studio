@@ -948,6 +948,26 @@ see the Known Limitations note before deploying if one is ever added.
     only caller, but it means the proxy trusts the backend to validate
     everything the browser could have put in a header, rather than
     stripping to an allowlist.
+24. **Resolved, 2026-08-22.** `agents.py::check_compliance_structured` — the
+    Greenlight Committee's compliance gate, called from `gatekeeper_node` —
+    used to gate on the legacy `check_retrieval_confidence()` boolean instead
+    of `retrieval_status()`. On a reranker outage, `retrieval_status()`
+    correctly reports `"unscored"`; the legacy boolean returned `False` for
+    that case exactly as it does for a genuinely empty guidelines collection,
+    so the function responded `{"hard_violations": [], "soft_violations":
+    [], "message": "No guidelines found."}` either way — retrieved-but-
+    unscored guideline text was never actually checked for violations. This
+    was the same bug class already fixed for `check_compliance`'s prose
+    report (a reranker outage indistinguishable from an empty knowledge
+    base — see this file's retrieval-pipeline notes and CLAUDE.md), which had
+    reappeared, unfixed, in this structured sibling. Fixed by branching
+    `check_compliance_structured` on `retrieval_status()` the same way
+    `check_compliance` does: `"empty"` and `"low_relevance"` still short-
+    circuit without a violations-checking LLM call, but `"unscored"` now
+    proceeds to check the retrieved guidelines (same as `"confident"`),
+    appending an explicit "ran unscored — verify manually" caveat to
+    `message` rather than collapsing into the empty-collection message.
+    Checks: `tests/backend/test_greenlight_compliance_gate.py`.
 
 ---
 

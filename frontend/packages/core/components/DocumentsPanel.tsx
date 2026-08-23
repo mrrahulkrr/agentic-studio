@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useSyncExternalStore } from "react";
-import { deleteDocument, ingestDocument } from "@/lib/api";
+import { deleteDocument, ingestDocument, quotaExhaustedDetail, type QuotaExhaustedDetail } from "@/lib/api";
 import { DEMO_DOCUMENTS, isDemo } from "@/lib/demo";
 import {
   Card,
@@ -13,6 +13,7 @@ import {
   InfoNote,
   PanelIntro,
   PrimaryButton,
+  QuotaDialog,
   Skeleton,
   Spinner,
   SuccessNote,
@@ -82,6 +83,7 @@ export default function DocumentsPanel() {
   const [uploadStatus, setUploadStatus] = useState("");
   const [uploadError, setUploadError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [uploadQuotaError, setUploadQuotaError] = useState<QuotaExhaustedDetail | null>(null);
 
   const [filename, setFilename] = useState("");
   const [deleteStatus, setDeleteStatus] = useState("");
@@ -106,6 +108,7 @@ export default function DocumentsPanel() {
     setUploading(true);
     setUploadStatus("");
     setUploadError("");
+    setUploadQuotaError(null);
     try {
       const res = await ingestDocument(file);
       setUploadStatus(
@@ -116,7 +119,14 @@ export default function DocumentsPanel() {
       remember(file.name);
       setFile(null);
     } catch (err) {
-      setUploadError(errorMessage(err));
+      const quota = quotaExhaustedDetail(err);
+      if (quota) {
+        // /ingest has no per-request override (see api.ts) — QuotaDialog
+        // renders the alternatives for awareness, not as working retries.
+        setUploadQuotaError(quota);
+      } else {
+        setUploadError(errorMessage(err));
+      }
     } finally {
       setUploading(false);
     }
@@ -236,7 +246,11 @@ export default function DocumentsPanel() {
             </div>
           )}
           {uploadStatus && <SuccessNote>{uploadStatus}</SuccessNote>}
-          {uploadError && <ErrorAlert message={uploadError} />}
+          {uploadQuotaError ? (
+            <QuotaDialog detail={uploadQuotaError} onStop={() => setUploadQuotaError(null)} />
+          ) : (
+            uploadError && <ErrorAlert message={uploadError} />
+          )}
         </Card>
 
         <Card className="space-y-5">

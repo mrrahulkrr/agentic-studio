@@ -21,6 +21,14 @@ import type {
   EvalSummary,
   HistoryTurn,
 } from "@/lib/api";
+// A real (runtime, not type-only) import, safely one-directional: content.ts
+// imports nothing from this file, so there is no cycle to worry about the
+// way there would be importing api.ts's ApiError class here (see the
+// quota-exhausted route below, and request()'s Demo Mode branch in api.ts).
+// Relative, with the extension, not the usual "@/lib/content" — same reason
+// as activity.ts's identical import: this module is exercised by
+// `node demo.test.ts`, and bare node does not know the @ alias.
+import { TIER_CANDIDATES, TIER_LABELS } from "./content.ts";
 
 // ---- The flag ------------------------------------------------------------
 // Shaped for useSyncExternalStore, which is how the app reads external state
@@ -510,6 +518,36 @@ const ROUTES: [string, RegExp, Handler][] = [
             : null,
       };
       return response;
+    },
+  ],
+
+  // Simulates a Gemini quota exhaustion. Not a real endpoint — only ever
+  // reached through api.ts::simulateQuotaExceeded(), which only
+  // AgentsPanel's Demo-Mode-only trigger button calls. Deliberately the
+  // STANDARD tier: one of the 8 (of 12) call sites that actually propagate
+  // a quota failure up to the endpoint rather than degrading silently
+  // (check_compliance_structured/gemini_rerank/score_faithfulness's own
+  // "flag topics" and rerank/eval calls swallow it like any other failure,
+  // by existing design — simulating one of those here would demonstrate a
+  // dialog that can never actually appear for real).
+  [
+    "POST",
+    /^\/run-agent\/simulate-quota-limit$/,
+    () => {
+      const tier = "STANDARD" as const;
+      const failedModel = TIER_CANDIDATES[tier][0].model;
+      throw {
+        __demoApiError: true,
+        status: 429,
+        detail: {
+          error_type: "gemini_quota_exhausted",
+          tier,
+          tier_label: TIER_LABELS[tier],
+          model_that_failed: failedModel,
+          alternatives: TIER_CANDIDATES[tier].filter((c) => c.model !== failedModel),
+          message: `The ${TIER_LABELS[tier].toLowerCase()} model has hit today's free usage limit. Pick another option to continue, or try again after the limit resets.`,
+        },
+      };
     },
   ],
 

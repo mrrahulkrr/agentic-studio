@@ -19,15 +19,17 @@ class SupervisorState(TypedDict):
     script_text: str
     task: str
     result: str
+    model_overrides: dict[str, str]
 
 
 async def route_node(state: SupervisorState) -> SupervisorState:
     task = state["task"]
+    overrides = state.get("model_overrides")
 
     if task == "compliance":
-        result = check_compliance(state["script_text"])
+        result = check_compliance(state["script_text"], model_overrides=overrides)
     elif task == "analyze":
-        result = analyze_script(state["script_text"])
+        result = analyze_script(state["script_text"], model_overrides=overrides)
     elif task == "release_listing":
         result = await get_genre_release_listing(state["script_text"].strip())
     elif task == "release_check":
@@ -65,15 +67,24 @@ def build_supervisor():
     return graph.compile()
 
 
-async def run_supervisor(script_text: str, task: str):
+async def run_supervisor(script_text: str, task: str, model_overrides: dict[str, str] | None = None):
     if task == "greenlight":
         graph = build_greenlight_committee()
-        initial_state = {"script_text": script_text, "iteration_count": 0}
+        initial_state = {
+            "script_text": script_text,
+            "iteration_count": 0,
+            "model_overrides": model_overrides or {},
+        }
         result_state = await graph.ainvoke(initial_state)
         return {"result": result_state["result"], "task": task}
 
     graph = build_supervisor()
-    initial_state = {"script_text": script_text, "task": task, "result": ""}
+    initial_state = {
+        "script_text": script_text,
+        "task": task,
+        "result": "",
+        "model_overrides": model_overrides or {},
+    }
     return await graph.ainvoke(initial_state)
 
 
@@ -89,10 +100,11 @@ class CommitteeState(TypedDict, total=False):
     previous_concerns: list
     result: str
     trace: list[str]
+    model_overrides: dict[str, str]
 
 
 async def digest_node(state: CommitteeState) -> CommitteeState:
-    digest = generate_script_digest(state["script_text"])
+    digest = generate_script_digest(state["script_text"], model_overrides=state.get("model_overrides"))
     state["script_digest"] = digest
     
     trace = state.get("trace", [])
@@ -107,7 +119,7 @@ async def producer_node(state: CommitteeState) -> CommitteeState:
     if "executive_review" in state and state["executive_review"]:
         rejections = state["executive_review"].get("concern_list", [])
     
-    pitch = producer_agent(state.get("script_digest", {}), rejections)
+    pitch = producer_agent(state.get("script_digest", {}), rejections, model_overrides=state.get("model_overrides"))
     state["producer_pitch"] = pitch
     state["iteration_count"] = state.get("iteration_count", 0) + 1
     return state
@@ -116,7 +128,9 @@ async def producer_node(state: CommitteeState) -> CommitteeState:
 async def gatekeeper_node(state: CommitteeState) -> CommitteeState:
     trace = state.get("trace", [])
     if "compliance_data" not in state or not state["compliance_data"]:
-        state["compliance_data"] = check_compliance_structured(state["script_text"])
+        state["compliance_data"] = check_compliance_structured(
+            state["script_text"], model_overrides=state.get("model_overrides")
+        )
         trace.append("Compliance checks fetched and mapped")
     
     if "date_conflict_data" not in state or not state["date_conflict_data"]:
@@ -154,7 +168,8 @@ async def executive_node(state: CommitteeState) -> CommitteeState:
         state.get("script_digest", {}),
         state.get("producer_pitch", {}),
         state.get("compliance_data", {}),
-        state.get("date_conflict_data", {})
+        state.get("date_conflict_data", {}),
+        model_overrides=state.get("model_overrides"),
     )
     if "executive_review" in state and state["executive_review"]:
         state["previous_concerns"] = state["executive_review"].get("concern_list", [])

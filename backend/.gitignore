@@ -1,7 +1,7 @@
 .env
 gcp-credentials.json
 service-account-credentials.json
-venv/
+.venv/
 __pycache__/
 *.pyc
 .claude/

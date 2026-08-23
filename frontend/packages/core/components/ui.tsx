@@ -2,7 +2,8 @@
 "use client";
 
 import { useState } from "react";
-import { ApiError } from "@/lib/api";
+import { ApiError, type QuotaExhaustedDetail } from "@/lib/api";
+import { QUOTA_DIALOG_COPY } from "@/lib/content";
 
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message;
@@ -389,6 +390,78 @@ export function ConfirmPanel({
         </PrimaryButton>
         <SecondaryButton onClick={onCancel} disabled={busy}>
           Cancel
+        </SecondaryButton>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The rate-limit fallback dialog: a model tier hit its free usage limit.
+ * Reuses ConfirmPanel's visual language (the bordered/tinted "this needs
+ * your explicit choice" box, the same button primitives) rather than the
+ * component itself, since this needs N mutually exclusive choices instead
+ * of one confirm/cancel pair. Takes over the view the same way ConfirmPanel
+ * does — the closest thing this app has to "modal": nothing here retries
+ * automatically, and nothing is pre-selected.
+ *
+ * `onPick` is optional: when the action that failed has no override
+ * mechanism of its own (currently just document upload — see
+ * DocumentsPanel.tsx), the alternatives are shown for awareness only, not
+ * as clickable retries that would silently do nothing.
+ */
+export function QuotaDialog({
+  detail,
+  onPick,
+  onStop,
+  busy = false,
+}: {
+  detail: QuotaExhaustedDetail;
+  onPick?: (model: string) => void;
+  onStop: () => void;
+  busy?: boolean;
+}) {
+  return (
+    <div className="animate-fade-in-up space-y-4 rounded-[var(--radius-surface)] border border-amber-400/30 bg-amber-400/[0.07] p-4 text-amber-50">
+      <div className="space-y-1.5">
+        <p className="text-title font-semibold">{QUOTA_DIALOG_COPY.title}</p>
+        <p className="text-label leading-relaxed opacity-90">{detail.message}</p>
+      </div>
+
+      <div className="space-y-2">
+        {detail.alternatives.map((alt) =>
+          onPick ? (
+            <button
+              key={alt.model}
+              onClick={() => onPick(alt.model)}
+              disabled={busy}
+              className="press w-full rounded-[var(--radius-control)] border border-white/10 bg-black/20 p-3 text-left transition-colors hover:border-amber-400/60 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <p className="font-mono text-label text-ink-50">{alt.model}</p>
+              <p className="mt-1 text-xs leading-relaxed opacity-80">{alt.description}</p>
+            </button>
+          ) : (
+            <div
+              key={alt.model}
+              className="w-full rounded-[var(--radius-control)] border border-white/10 bg-black/20 p-3 text-left"
+            >
+              <p className="font-mono text-label text-ink-50">{alt.model}</p>
+              <p className="mt-1 text-xs leading-relaxed opacity-80">{alt.description}</p>
+            </div>
+          )
+        )}
+        {!onPick && (
+          <p className="whitespace-pre-line rounded-[var(--radius-control)] border border-white/10 bg-black/25 px-3 py-2.5 text-xs leading-relaxed opacity-90">
+            {QUOTA_DIALOG_COPY.ingestNote}
+          </p>
+        )}
+      </div>
+
+      {busy && <p className="text-xs text-amber-200/80">{QUOTA_DIALOG_COPY.retrying}</p>}
+
+      <div className="flex flex-wrap gap-2">
+        <SecondaryButton onClick={onStop} disabled={busy}>
+          {QUOTA_DIALOG_COPY.stopHere}
         </SecondaryButton>
       </div>
     </div>

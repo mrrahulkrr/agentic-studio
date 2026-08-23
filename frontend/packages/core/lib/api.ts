@@ -1,6 +1,6 @@
 // Every call into the Agentic Studio backend (main.py) lives in this file.
 
-import { DEMO_COPY } from "@/lib/content";
+import { DEMO_COPY, type ModelTier } from "@/lib/content";
 import { demoRequest, isDemo } from "@/lib/demo";
 import { DOWNLOAD_DESCRIPTION, narrateRequest, startActivity } from "@/lib/activity";
 import { logApiEnd, logApiStart } from "@/lib/apilog";
@@ -173,13 +173,60 @@ export interface AdminListResponse {
   rows: AdminRow[];
 }
 
+// ---- Model quota fallback ----
+// The one structured error shape in the app: every other endpoint's error
+// detail is a plain string. This one carries which tier hit its limit and
+// what to try instead, so the caller can render the rate-limit dialog
+// (ui.tsx::QuotaDialog) instead of the ordinary passive ErrorAlert.
+
+export interface QuotaAlternative {
+  model: string;
+  description: string;
+}
+
+export interface QuotaExhaustedDetail {
+  error_type: "gemini_quota_exhausted";
+  tier: ModelTier;
+  tier_label: string;
+  model_that_failed: string;
+  alternatives: QuotaAlternative[];
+  message: string;
+}
+
 class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The raw `detail` from the response body, when it was an object rather
+   * than a plain string — e.g. a QuotaExhaustedDetail. Most callers never
+   * need this; `message` already reads fine on its own for every shape. */
+  detail?: unknown;
+  constructor(status: number, message: string, detail?: unknown) {
     super(message);
     this.status = status;
+    this.detail = detail;
     this.name = "ApiError";
   }
+}
+
+/** Narrows an unknown catch-clause error down to the quota-exhausted shape,
+ * or null for every other kind of failure — the one check a panel needs
+ * before choosing QuotaDialog over the ordinary ErrorAlert. */
+export function quotaExhaustedDetail(err: unknown): QuotaExhaustedDetail | null {
+  if (!(err instanceof ApiError) || !err.detail || typeof err.detail !== "object") return null;
+  const detail = err.detail as Record<string, unknown>;
+  return detail.error_type === "gemini_quota_exhausted" ? (detail as unknown as QuotaExhaustedDetail) : null;
+}
+
+/** What lib/demo.ts's quota-exhausted fixture throws in place of resolving —
+ * see request()'s Demo Mode branch, which converts this into a real
+ * ApiError. Plain and tagged, not an ApiError instance, so demo.ts never
+ * needs a runtime import from this file. */
+function isDemoApiError(err: unknown): err is { status: number; detail: QuotaExhaustedDetail } {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    "__demoApiError" in err &&
+    (err as { __demoApiError?: unknown }).__demoApiError === true
+  );
 }
 
 /**
@@ -194,7 +241,19 @@ async function request<T>(path: string, options: RequestInit = {}, authed = fals
   try {
     let body: unknown;
     if (isDemo()) {
-      body = await demoRequest(path, options);
+      try {
+        body = await demoRequest(path, options);
+      } catch (err) {
+        // The one fixture that simulates a failure rather than a 200 (the
+        // quota-exhausted demo trigger) throws this tagged plain shape
+        // instead of an ApiError — demo.ts has no runtime import of this
+        // file's ApiError class, to keep it free of the api.ts<->demo.ts
+        // cycle that would otherwise create. Converted here, once, so
+        // everything downstream (quotaExhaustedDetail, the outer catch
+        // below, errorMessage) sees a real ApiError exactly like live mode
+        // would produce.
+        throw isDemoApiError(err) ? new ApiError(err.status, err.detail.message, err.detail) : err;
+      }
       // Fixtures have no HTTP status of their own; the entry is flagged as simulated
       // so the log never passes a made-up 200 off as a real one.
       logApiEnd(logId, { status: 200, ok: true, response: body });
@@ -235,7 +294,18 @@ async function liveRequest(
 
   if (!res.ok) {
     const detail = body?.detail ?? body?.error ?? res.statusText;
-    throw new ApiError(res.status, typeof detail === "string" ? detail : JSON.stringify(detail));
+    // A structured detail (currently just the quota-exhausted shape) carries
+    // its own plain-language `message`; everything else is either already a
+    // string or, on the rare object-shaped-but-unrecognized detail, falls
+    // back to a JSON dump exactly as before. Either way `detail` itself is
+    // still attached below, so quotaExhaustedDetail() can read it.
+    const message =
+      typeof detail === "string"
+        ? detail
+        : detail && typeof detail === "object" && typeof (detail as { message?: unknown }).message === "string"
+        ? (detail as { message: string }).message
+        : JSON.stringify(detail);
+    throw new ApiError(res.status, message, detail);
   }
   // Settled here rather than in request(), because this is where the real status is.
   logApiEnd(logId, { status: res.status, ok: true, response: body });
@@ -250,18 +320,41 @@ export function checkHealth() {
 
 // ---- Agents ----
 
-export function runAgent(scriptText: string, task: TaskType, sessionId: string, evaluate: boolean) {
+export function runAgent(
+  scriptText: string,
+  task: TaskType,
+  sessionId: string,
+  evaluate: boolean,
+  /** Which model to use instead of a tier's default, for just this call —
+   * e.g. {"STANDARD": "gemini-3.6-flash"} after the rate-limit dialog asked
+   * the user to pick an alternative. Omitted/empty is today's exact
+   * behavior; the backend rejects anything not on that tier's approved
+   * list rather than passing it through to the Gemini API. */
+  modelOverrides?: Partial<Record<ModelTier, string>>
+) {
   const form = new URLSearchParams({
     script_text: scriptText,
     task,
     session_id: sessionId,
     evaluate: String(evaluate),
   });
+  if (modelOverrides && Object.keys(modelOverrides).length > 0) {
+    form.set("model_overrides", JSON.stringify(modelOverrides));
+  }
   return request<AgentResponse>(
     "/run-agent",
     { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form },
     true
   );
+}
+
+/** Demo-Mode-only: fires the one fixture that simulates a Gemini quota
+ * exhaustion, so QuotaDialog can be walked through without needing to
+ * actually exhaust a real quota. Live-mode has no matching backend route —
+ * this is never called outside Demo Mode (see AgentsPanel.tsx's trigger,
+ * gated on isDemo()). */
+export function simulateQuotaExceeded() {
+  return request<AgentResponse>("/run-agent/simulate-quota-limit", { method: "POST" }, true);
 }
 
 export function checkConflicts(resultId: number, sessionId: string = "default") {

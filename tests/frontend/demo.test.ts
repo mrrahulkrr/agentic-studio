@@ -1,10 +1,13 @@
 // Checks for Demo Mode. Plain asserts, no framework — Node 22.6+ strips the types:
 //
-//   cd frontend && node lib/demo.test.ts
+//   cd tests/frontend && node demo.test.ts
 //
 // What would actually break: a call in api.ts with no matching fixture (the user
 // sees an error in the middle of a demo), or a fixture that stops saying it is
 // demo data.
+//
+// Moved to tests/frontend/ (see tests/TEST_PLAN.md); imports below reach back
+// into frontend/packages/core/lib/ since the source it tests still lives there.
 
 import assert from "node:assert/strict";
 import {
@@ -19,9 +22,14 @@ import {
   stopWalkthrough,
   subscribeDemo,
   type WalkthroughId,
-} from "./demo.ts";
-import { WALKTHROUGHS } from "./content.ts";
-import { describeRequest } from "./activity.ts";
+} from "../../frontend/packages/core/lib/demo.ts";
+import {
+  TIER_CANDIDATES,
+  TIER_DEFAULT_MODELS,
+  TIER_LABELS,
+  WALKTHROUGHS,
+} from "../../frontend/packages/core/lib/content.ts";
+import { describeRequest } from "../../frontend/packages/core/lib/activity.ts";
 import {
   MASK,
   clearApiLog,
@@ -32,7 +40,7 @@ import {
   logApiStart,
   maskSecrets,
   setApiLogVisible,
-} from "./apilog.ts";
+} from "../../frontend/packages/core/lib/apilog.ts";
 
 // ---- the flag ----
 
@@ -91,6 +99,65 @@ await assert.rejects(
   /no fixture/,
   "an unrouted path must fail loudly rather than resolve to nothing"
 );
+
+// ---- quota-exhausted fallback demo trigger ----
+// Not in CALLS above: it always rejects rather than resolving, so it can't
+// share that Promise.all. Checked separately, and against the *specific*
+// tagged shape api.ts::request() looks for — not just "it rejected with
+// something" (the unrouted-path check above already proves that much) —
+// which is what actually confirms this path is routed rather than falling
+// through to the generic "no fixture" error tested just above.
+
+await assert.rejects(
+  () => demoRequest("/run-agent/simulate-quota-limit", { method: "POST" }),
+  (err: unknown) => {
+    const e = err as {
+      __demoApiError?: boolean;
+      status?: number;
+      detail?: { error_type?: string; tier?: string; alternatives?: unknown[]; message?: string };
+    };
+    // The generic "no fixture" rejection (tested just above) is a plain
+    // Error with no __demoApiError tag — this being present and true is
+    // itself proof this path matched a real route rather than falling
+    // through to that catch-all.
+    assert.equal(e.__demoApiError, true);
+    assert.equal(e.status, 429);
+    assert.equal(e.detail?.error_type, "gemini_quota_exhausted");
+    assert.equal(e.detail?.tier, "STANDARD", "must simulate a tier that actually propagates, not one of the 4 that swallow it");
+    assert.ok(Array.isArray(e.detail?.alternatives) && e.detail!.alternatives!.length > 0);
+    assert.ok(e.detail?.message && e.detail.message.length > 0);
+    return true;
+  },
+  "the quota-exhausted demo trigger must be routed, carrying the tagged shape request() expects"
+);
+
+// ---- model tiers (mirrors config.py::TIER_MODELS/TIER_CANDIDATES) ---------
+// Structural checks only — not a verbatim re-typing of the approved
+// description text, which would just be a brittle third copy of it. What
+// has to hold: every tier lists its own shipped default among its
+// candidates, and every 2.5-series option — the ones with a real near-term
+// deprecation risk — carries that flag in its own description text.
+
+assert.deepEqual(Object.keys(TIER_LABELS).sort(), ["FAST", "QUALITY", "STANDARD"]);
+
+for (const tier of ["FAST", "STANDARD", "QUALITY"] as const) {
+  const candidates = TIER_CANDIDATES[tier];
+  assert.ok(candidates.length >= 1 && candidates.length <= 3, `${tier} should offer 1-3 candidates`);
+  assert.ok(
+    candidates.some((c) => c.model === TIER_DEFAULT_MODELS[tier]),
+    `${tier}'s own shipped default must be one of its candidates`
+  );
+  for (const candidate of candidates) {
+    assert.ok(candidate.description.length > 0, `${candidate.model} needs a description`);
+    if (candidate.model.startsWith("gemini-2.5")) {
+      assert.match(
+        candidate.description,
+        /mid-October 2026/,
+        `${candidate.model} is a 2.5-series option and must carry its deprecation flag`
+      );
+    }
+  }
+}
 
 // ---- fixtures say they are fixtures ----
 

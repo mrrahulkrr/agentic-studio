@@ -1,4 +1,4 @@
-venv/
+.venv/
 .env
 # Credential JSON (GCP service-account keys download under their project id).
 # No tracked .json lives at the repo root — all of them are under frontend/.

@@ -17,8 +17,9 @@ Every backend module imports via the `app.` package prefix (`from app.core.confi
 
 Nothing in the client or developer app requires the other to be running — each is a normal Next.js app with its own `package.json`, own port, own `.env.local`. Both need the backend and (for the release-date flow) Agent 4.
 
-- Backend tests, from `backend/`: `python test_release_conflicts.py` (15 checks — release-date logic, retrieval confidence gate), `python test_admin_tables.py` (17 checks — admin registry, structural marking, SQL identifier safety), `python test_auth.py` (11 checks — password hashing, session JWT roundtrip/tamper, and the role gate's 401/403/pass paths including DB-recheck-on-downgrade and deleted-account cases). Plain asserts, no framework needed; all three written so pytest collects them unchanged if pytest is ever added.
-- Frontend checks: `node lib/demo.test.ts` from `frontend/packages/core` — same style, no runner (Node ≥ 22.6 strips the types). Covers Demo Mode fixtures, the walkthrough store, activity narration and API-key masking.
+- All test-related files live under the root-level `tests/` directory — `tests/backend/` (11 files, 117 checks) and `tests/frontend/` — not inside `backend/` or `frontend/` themselves. Plain asserts, no framework, every file runnable standalone and also written so pytest would collect it unchanged if pytest is ever added. Run everything with `./run_tests.sh` from the repo root (`--backend`, `--frontend`, or `--unit` to skip lint/tsc/build), or run a single file directly, e.g. `cd tests/backend && python test_auth.py`. Full risk rationale, per-file coverage mapping, and the sys.path fixup each backend file uses (since they import the `app.` package prefix from outside `backend/`) are in [`tests/TEST_PLAN.md`](tests/TEST_PLAN.md); a narrated walkthrough for someone new to the suite is in [`tests/TESTING_GUIDE.md`](tests/TESTING_GUIDE.md).
+- `tests/backend/test_release_conflicts.py` (15 checks — release-date logic, retrieval confidence gate), `tests/backend/test_admin_tables.py` (17 checks — admin registry, structural marking, SQL identifier safety), `tests/backend/test_auth.py` (11 checks — password hashing, session JWT roundtrip/tamper, and the role gate's 401/403/pass paths including DB-recheck-on-downgrade and deleted-account cases) are the three oldest files; the rest of `tests/backend/` extends the same style to the Greenlight Committee, the calendar/Agent-4/rate-limiter failure modes, and the release-date state-carrier string.
+- Frontend checks: `node demo.test.ts` from `tests/frontend/` — same style, no runner (Node ≥ 22.6 strips the types). Covers Demo Mode fixtures, the walkthrough store, activity narration and API-key masking.
 - Frontend, run inside **each** of `frontend/apps/client` and `frontend/apps/admin` separately (they are independent installs): `npm run lint`, `npx tsc --noEmit`, `npm run build`. The lint config enforces React 19's `react-hooks/set-state-in-effect` — a bare `setState()` call in an effect body fails the build. Fetch inside an inline async IIFE with a `cancelled` guard (see `InsightsPanel.tsx` or `lib/session.ts`), or use `useSyncExternalStore` for external stores (see `DocumentsPanel.tsx`).
 - DB schema: created idempotently by `init_tables()` on first use — no migration tool. Adding a column means editing `_create_schema()` **and** hand-applying it to existing databases (`CREATE TABLE IF NOT EXISTS` won't alter one).
 - First developer account: `python backend/seed_admin.py you@studio.com` (prompts for a password). There is no signup UI — every account after the first is created from the Users tab in the developer app.
@@ -82,7 +83,7 @@ All queries go through a lazily-built `ThreadedConnectionPool`. Connecting to th
 - `documents.embedding` is omitted from row payloads (768 floats × 50 rows); it stays in the column metadata flagged `omitted`.
 - Reads require **both** `require_api_key` and `require_role("developer")`, unlike `/result/{id}` and `/history/{id}` — a whole-table dump is a different exposure, and now also a different audience (developer app only).
 - `?q=` searches by casting every readable column to text and ILIKE-ing it. The count query must keep the same filter or pagination pages past the end.
-- Checks: `python test_admin_tables.py`.
+- Checks: `tests/backend/test_admin_tables.py`.
 
 `apps/admin/components/DatabaseEditor.tsx` holds the write controls. Structural fields are gated three deep — unlock the field, confirm the risk, confirm again on save listing every structural column actually changed — and never blocked. `DATABASE_WRITE_COPY.structuralRisks` (keyed `table.column`) is the *what breaks* sentence; a column with no entry gets a vaguer fallback but never silence, so a newly flagged column degrades safely. Deletes always name their consequence, and `documents` deletes the whole filename group with the count in the confirmation. Every write bumps a `reload` counter that is part of the fetch's request key, so the list and the per-table counts refetch — a UI showing the pre-save value is how people learn not to trust it.
 
@@ -116,7 +117,6 @@ frontend/
     lib/apilog.ts           technical request/response log
     lib/session.ts          useSession() — login/role gate, demo-aware
     lib/proxy.ts             the same-origin backend proxy both apps re-export
-    lib/demo.test.ts        all frontend checks — `node lib/demo.test.ts`
     components/             ui.tsx + every panel that isn't developer-only
     globals.css              design tokens, imported by both apps
   apps/client/
@@ -129,11 +129,13 @@ frontend/
                               (imported via the @/admin/* alias, never @/components/*)
 ```
 
+Frontend checks (`demo.test.ts`) live at the repo root under `tests/frontend/`, not inside `frontend/` itself — see "Commands" above and [`tests/TEST_PLAN.md`](tests/TEST_PLAN.md).
+
 `lib/content.ts` is the single source of truth for explanatory copy, and it mirrors backend constants — `GENRES` must match `agents.py::GENRE_IDS`, `MIN_SCRIPT_CHARS` must match the `min_length` in `run_agent_endpoint`. Update both together.
 
 The UI is written for someone who has never seen the tool: each task states what it does, what input it needs, and what comes back. Keep that property when adding features.
 
-`lib/demo.ts` is Demo Mode: a module-level flag plus fixture responses for every endpoint. `api.ts::request()` short-circuits to `demoRequest()` when the flag is on, so no panel knows the mode exists and nothing reaches the network, the LLM quota, or Google Calendar. The flag is deliberately not persisted (off on every load), and each app's `page.tsx` keys the tab container on it so toggling remounts every panel rather than leaving a demo answer on screen. **Adding an endpoint means adding a fixture** — an unrouted path throws. `lib/session.ts` is the one deliberate exception: it short-circuits to a synthetic user under Demo Mode rather than adding fixtures for a login system that isn't the point of a demo. Checks: `node lib/demo.test.ts` from `frontend/packages/core`.
+`lib/demo.ts` is Demo Mode: a module-level flag plus fixture responses for every endpoint. `api.ts::request()` short-circuits to `demoRequest()` when the flag is on, so no panel knows the mode exists and nothing reaches the network, the LLM quota, or Google Calendar. The flag is deliberately not persisted (off on every load), and each app's `page.tsx` keys the tab container on it so toggling remounts every panel rather than leaving a demo answer on screen. **Adding an endpoint means adding a fixture** — an unrouted path throws. `lib/session.ts` is the one deliberate exception: it short-circuits to a synthetic user under Demo Mode rather than adding fixtures for a login system that isn't the point of a demo. Checks: `node demo.test.ts` from `tests/frontend/`.
 
 `lib/activity.ts` + `components/ActivityFeed.tsx` narrate what the app is doing, in plain language, while it does it. `request()` calls `narrateRequest()` on the way in and `finish(body)` on the way out, so the outcome line is computed from the real response and reads the same in both modes — no panel does any of this itself. `describeRequest()` is pure and covered by the checks, including a regex that rejects internal vocabulary (`hybrid`, `rerank`, `chunk`, `A2A`, …) in any user-visible step. Routes with no entry stay silent, which is what keeps the 30-second health poll (and now `/auth/me`) out of the feed.
 
@@ -154,4 +156,4 @@ The UI is written for someone who has never seen the tool: each task states what
 
 ## Reference
 
-`backend/ARCHITECTURE.md` (per-file responsibilities, sync/async boundaries, known limitations) and `PROJECT_GUIDE.md` (setup, env vars, endpoint contracts, client-side features, troubleshooting). Both have been brought up to date with the auth + two-frontend work above. Their older content still predates that work in a few corners (deployment topology in particular assumes one frontend); this file is authoritative where they disagree. `frontend/packages/core/README.md` is the short, frontend-only version of the "Two frontends, one backend" section above.
+`backend/ARCHITECTURE.md` (per-file responsibilities, sync/async boundaries, known limitations) and `PROJECT_GUIDE.md` (setup, env vars, endpoint contracts, client-side features, troubleshooting). Both have been brought up to date with the auth + two-frontend work above. Their older content still predates that work in a few corners (deployment topology in particular assumes one frontend); this file is authoritative where they disagree. `frontend/packages/core/README.md` is the short, frontend-only version of the "Two frontends, one backend" section above. `tests/TEST_PLAN.md` is the risk rationale and coverage map for the test suite; `tests/TESTING_GUIDE.md` is the step-by-step "how to actually run and extend it" guide.

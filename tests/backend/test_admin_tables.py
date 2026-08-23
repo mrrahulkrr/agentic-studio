@@ -10,7 +10,18 @@ Scope: everything here is pure — the registry, identifier validation, paginati
 clamping and primary-key coercion. Those are the parts that decide what SQL gets
 built, so they are the parts worth pinning down. Anything that reads
 information_schema or a real row needs a database and is not covered.
+
+Moved to tests/backend/ (see tests/TEST_PLAN.md); the sys.path fixup below is
+needed because these modules import via the `app.` package prefix, which
+only resolves when backend/ is on sys.path.
 """
+
+import sys
+from pathlib import Path
+
+_BACKEND_DIR = Path(__file__).resolve().parents[2] / "backend"
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
 from app.data.database import (
     ADMIN_LIST_MAX_LIMIT,

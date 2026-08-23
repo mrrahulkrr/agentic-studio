@@ -1,5 +1,5 @@
 import json
-from app.core.llm import embed_text, generate_text
+from app.core.llm import embed_text, generate_for_tier
 from app.data.database import search_similar, bm25_search
 from app.core.resilience import logger
 import numpy as np
@@ -30,8 +30,17 @@ Query: {query}
 Documents:
 {candidates_text}"""
 
+    # Broad except deliberately includes GeminiQuotaExhausted: reranking
+    # already degrades to unscored on any failure (bad JSON, wrong array
+    # length, a down model), so quota exhaustion — the highest-volume tier's
+    # most likely failure — degrades the same way rather than failing every
+    # compliance/analyze/greenlight run that happens to touch retrieval
+    # while it lasts. `tier` is still attached to the exception by
+    # generate_for_tier before it's caught here; this call site's own
+    # contract is just to never let it (or anything else) escape.
     try:
-        response = generate_text(
+        response = generate_for_tier(
+            "FAST",
             "You are a relevance scoring system. Respond only with JSON.",
             prompt,
             temperature=0.0,

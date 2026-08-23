@@ -11,8 +11,18 @@ session's role against `app.data.database.get_user_by_id` (so a role change
 or account deletion doesn't stay live for the rest of a 12h session) — the
 require_role tests below monkeypatch that one function with an in-memory
 users dict instead of hitting a database.
+
+Moved to tests/backend/ (see tests/TEST_PLAN.md); the sys.path fixup below is
+needed because these modules import via the `app.` package prefix, which
+only resolves when backend/ is on sys.path.
 """
 import os
+import sys
+from pathlib import Path
+
+_BACKEND_DIR = Path(__file__).resolve().parents[2] / "backend"
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
 os.environ.setdefault("API_SECRET_KEY", "test-secret-not-for-prod")
 

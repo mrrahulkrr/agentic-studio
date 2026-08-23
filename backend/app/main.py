@@ -6,7 +6,10 @@ import secrets
 from datetime import datetime, timedelta
 from uuid import uuid4
 import httpx
-from app.core.config import MAX_UPLOAD_FILE_SIZE_MB, AGENT4_BASE_URL, CALENDAR_MODE, API_SECRET_KEY, SUPPORTED_COUNTRIES
+from app.core.config import (
+    MAX_UPLOAD_FILE_SIZE_MB, AGENT4_BASE_URL, CALENDAR_MODE, API_SECRET_KEY, SUPPORTED_COUNTRIES,
+    TIER_CANDIDATES, TIER_LABELS,
+)
 from app.data.database import (
     init_tables, get_result, connection, record_run,
     get_result_with_script, delete_documents_by_filename, cache_get,
@@ -27,6 +30,7 @@ from app.ai.supervisor import run_supervisor
 from app.ai.agents import resolve_genre_from_listing, check_conflicts_via_a2a
 from app.core.guardrails import check_query_safety
 from app.ai.evaluator import score_faithfulness
+from app.core.llm import GeminiQuotaExhausted
 from app.core.resilience import check_rate_limit, logger
 from app.schemas import TaskType, AgentResponse
 from fastapi.responses import Response
@@ -63,6 +67,70 @@ async def global_exception_handler(request, exc):
 def require_api_key(x_api_key: str | None = Header(default=None)):
     if not API_SECRET_KEY or not x_api_key or not secrets.compare_digest(x_api_key, API_SECRET_KEY):
         raise HTTPException(status_code=403, detail="Missing or invalid API key.")
+
+
+# ---------------------------------------------------------------------------
+# Model-tier quota fallback
+#
+# /run-agent lets a caller override which model a tier uses for that one
+# request (e.g. after the rate-limit dialog below asks the user to pick an
+# alternative). Validated here, at the boundary, against config.TIER_CANDIDATES
+# — rejected outright rather than passed through to the Gemini API, the same
+# way /finalize-calendar rejects an unknown country code up front instead of
+# discovering it deep in the call stack.
+# ---------------------------------------------------------------------------
+
+
+def _validate_model_overrides(raw: str) -> dict[str, str]:
+    if not raw or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="model_overrides must be valid JSON.")
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="model_overrides must be a JSON object keyed by tier.")
+
+    validated: dict[str, str] = {}
+    for tier, model in parsed.items():
+        if tier not in TIER_CANDIDATES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown tier '{tier}'. Expected one of: {', '.join(TIER_CANDIDATES)}.",
+            )
+        allowed = {c["model"] for c in TIER_CANDIDATES[tier]}
+        if model not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{model}' is not an approved model for the {tier} tier. "
+                    f"Approved: {', '.join(sorted(allowed))}."
+                ),
+            )
+        validated[tier] = model
+    return validated
+
+
+def _quota_exhausted_payload(exc: GeminiQuotaExhausted) -> dict:
+    """The structured 429 body for a Gemini quota exhaustion — the shape the
+    frontend's rate-limit dialog reads (tier + plain-language alternatives),
+    not a raw Gemini error string. `alternatives` excludes the model that
+    just failed; offering it again as a choice would be nonsensical."""
+    tier = exc.tier or "FAST"  # generate_for_tier always sets this; the fallback is defensive only
+    label = TIER_LABELS[tier]
+    alternatives = [c for c in TIER_CANDIDATES[tier] if c["model"] != exc.model]
+    return {
+        "error_type": "gemini_quota_exhausted",
+        "tier": tier,
+        "tier_label": label,
+        "model_that_failed": exc.model,
+        "alternatives": alternatives,
+        "message": (
+            f"The {label.lower()} model has hit today's free usage limit. "
+            "Pick another option to continue, or try again after the limit resets."
+        ),
+    }
+
 
 HOLIDAY_CONFLICT_WINDOW_DAYS = 3
 # Display names only, for calendar-event labels — SUPPORTED_COUNTRIES (config.py) is
@@ -154,7 +222,13 @@ async def ingest_endpoint(file: UploadFile = File(...)):
     for page in reader.pages:
         text += page.extract_text() + "\n"
 
-    ids = ingest_document(text, {"filename": file.filename})
+    # classify_chunk (FAST tier) runs once per chunk; a quota exhaustion partway
+    # through a multi-chunk PDF surfaces here rather than as a generic 500 —
+    # chunks already inserted before the failure stay inserted.
+    try:
+        ids = ingest_document(text, {"filename": file.filename})
+    except GeminiQuotaExhausted as exc:
+        raise HTTPException(status_code=429, detail=_quota_exhausted_payload(exc))
     return {"inserted_chunks": len(ids), "ids": ids}
 
 
@@ -183,7 +257,13 @@ async def run_agent_endpoint(
     script_text: str = Form(...),
     task: TaskType = Form(...),
     session_id: str = Form(default="default"),
-    evaluate: bool = Form(default=False)
+    evaluate: bool = Form(default=False),
+    # JSON-encoded {"FAST": "...", "STANDARD": "...", "QUALITY": "..."}, e.g. from
+    # the rate-limit fallback dialog re-submitting the same run with the tier the
+    # user just picked an alternative for. A plain Form field, not a Body param,
+    # since this endpoint is otherwise entirely form-encoded and FastAPI doesn't
+    # mix the two on one request. Empty/absent is today's exact behavior.
+    model_overrides: str = Form(default=""),
 ):
     if not check_rate_limit(session_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Please wait before submitting another request.")
@@ -194,6 +274,8 @@ async def run_agent_endpoint(
     check_toxicity = task not in (TaskType.greenlight, TaskType.analyze)
     if not check_query_safety(script_text, min_length=min_length, check_toxicity=check_toxicity):
         raise HTTPException(status_code=400, detail="Script text is too short or invalid.")
+
+    validated_overrides = _validate_model_overrides(model_overrides)
 
     cache_key = f"{task.value}:{script_text}"
     cached = cache_get(cache_key)
@@ -207,7 +289,11 @@ async def run_agent_endpoint(
         )
         return {"result_id": result_id, "task": task.value, "result": cached, "from_cache": True}
 
-    state = await run_supervisor(script_text, task.value)
+    try:
+        state = await run_supervisor(script_text, task.value, model_overrides=validated_overrides)
+    except GeminiQuotaExhausted as exc:
+        raise HTTPException(status_code=429, detail=_quota_exhausted_payload(exc))
+
     result_id = record_run(
         task=task.value, script_text=script_text, result=state["result"],
         session_id=session_id, user_turn=user_turn,
@@ -216,7 +302,14 @@ async def run_agent_endpoint(
 
     eval_score = None
     if evaluate:
-        faith_result = score_faithfulness(script_text, state["result"])
+        # score_faithfulness never raises GeminiQuotaExhausted — its own
+        # contract (unchanged) is to degrade to a None-scored EvalResult on
+        # any failure, so the already-successful result above is never
+        # discarded just because the optional eval score couldn't be
+        # computed. See its docstring.
+        faith_result = score_faithfulness(
+            script_text, state["result"], model_override=validated_overrides.get("QUALITY")
+        )
         save_eval_record(task.value, faith_result.score)
         eval_score = faith_result.model_dump()
 

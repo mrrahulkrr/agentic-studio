@@ -19,4 +19,4 @@ Admin-only components (`DatabasePanel`, `DatabaseEditor`, `ApiLogPanel`,
 `UsersPanel`) live in `apps/admin/components` instead, under the `@/admin/*`
 alias, specifically so they can never end up in the client bundle by accident.
 
-Checks: `node lib/demo.test.ts` from this directory.
+Checks: `node demo.test.ts` from `tests/frontend/` at the repo root (not from this directory — all test files live under the root-level `tests/`; see `tests/TESTING_GUIDE.md`).

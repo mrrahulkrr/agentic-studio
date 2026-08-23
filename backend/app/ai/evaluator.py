@@ -1,4 +1,4 @@
-from app.core.llm import generate_text
+from app.core.llm import generate_for_tier
 import json
 import re
 
@@ -25,7 +25,9 @@ def _parse_json_response(text: str) -> dict:
     raise ValueError(f"Could not parse JSON from response: {text[:200]}")
 
 
-def score_faithfulness(script_text: str, agent_result: str) -> EvalResult:
+def score_faithfulness(
+    script_text: str, agent_result: str, model_override: str | None = None
+) -> EvalResult:
     prompt = f"""Compare this analysis against the source script. Rate 1-10 how well the
 analysis is grounded in the actual script content, versus making unsupported claims.
 
@@ -35,10 +37,18 @@ Analysis: {agent_result}
 
 Respond ONLY with JSON: {{"score": <number>, "reasoning": "<why>"}}"""
 
+    # Deliberately still a single broad except, quota exhaustion included: an
+    # optional eval score failing must never take down an already-successful
+    # primary result. GeminiQuotaExhausted still gets `tier` attached (see
+    # generate_for_tier) before landing here — it's just that this call site's
+    # own contract, unlike main.py's run-agent path, is to never propagate any
+    # failure past itself, and that isn't something this task changes.
     try:
-        response = generate_text(
+        response = generate_for_tier(
+            "QUALITY",
             "You are an evaluation system. Respond only with valid JSON.",
             prompt,
+            model_override=model_override,
             temperature=0.0,
             response_json=True,
         )

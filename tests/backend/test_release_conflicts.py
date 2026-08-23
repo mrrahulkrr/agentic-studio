@@ -5,7 +5,18 @@ Run directly with no test framework installed:
     python test_release_conflicts.py
 
 It is also written so `pytest` collects it unchanged if pytest is added later.
+
+Moved to tests/backend/ (see tests/TEST_PLAN.md); the sys.path fixup below is
+needed because these modules import via the `app.` package prefix, which
+only resolves when backend/ is on sys.path.
 """
+
+import sys
+from pathlib import Path
+
+_BACKEND_DIR = Path(__file__).resolve().parents[2] / "backend"
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
 from datetime import date
 
