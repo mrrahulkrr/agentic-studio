@@ -290,7 +290,16 @@ async function liveRequest(
   }
 
   const contentType = res.headers.get("content-type") ?? "";
-  const body = contentType.includes("application/json") ? await res.json().catch(() => null) : null;
+  // /admin/docs/{key} is the one endpoint whose success body isn't JSON — raw
+  // markdown, straight from the file on disk (see docs_registry.py). Its own
+  // error path is still JSON (HTTPException serializes that way regardless of
+  // the route's declared media_type), so this only ever produces a string on
+  // the 200 case, same as every other body here would going through res.json().
+  const body = contentType.includes("application/json")
+    ? await res.json().catch(() => null)
+    : contentType.includes("text/markdown")
+    ? await res.text()
+    : null;
 
   if (!res.ok) {
     const detail = body?.detail ?? body?.error ?? res.statusText;
@@ -510,6 +519,26 @@ export function getAdminRows(
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (query.trim()) params.set("q", query.trim());
   return request<AdminListResponse>(`/admin/tables/${table}?${params}`, {}, true);
+}
+
+// ---- Developer docs viewer ----
+// Same gate as the admin table browser above (require_api_key + require_role
+// "developer"), and the same "read fresh, never a build-time copy" property:
+// listDocs()/getDoc() hit the backend on every call, which reads the file off
+// disk on every request (see docs_registry.py) — nothing here is cached.
+
+export interface DocEntry {
+  key: string;
+  title: string;
+}
+
+export function listDocs() {
+  return request<{ docs: DocEntry[] }>("/admin/docs", {}, true);
+}
+
+/** Raw markdown text, not JSON — see liveRequest's text/markdown branch above. */
+export function getDoc(key: string) {
+  return request<string>(`/admin/docs/${encodeURIComponent(key)}`, {}, true);
 }
 
 // ---- Auth ----

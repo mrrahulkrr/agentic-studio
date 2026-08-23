@@ -25,6 +25,7 @@ from app.core.auth import (
     COOKIE_NAME, SESSION_HOURS, create_session_token, get_current_user,
     hash_password, require_role, verify_password,
 )
+from app.core.docs_registry import doc_summary, get_doc_text
 from app.data.ingest import ingest_document
 from app.ai.supervisor import run_supervisor
 from app.ai.agents import resolve_genre_from_listing, check_conflicts_via_a2a
@@ -683,3 +684,28 @@ async def admin_delete_row_endpoint(table: str, row_id: str):
 
     logger.info(f"admin deleted {deleted['deleted_rows']} row(s) from {table} via id={row_id}")
     return {"table": table, "row_id": row_id, **deleted}
+
+
+# ---------------------------------------------------------------------------
+# Developer docs viewer
+#
+# Same gate as /admin/tables/* above, for the same reason: whole-document
+# reads (architecture internals, test rationale) are a different exposure
+# than the app's other open reads, and developer-app-only content besides.
+# DOC_REGISTRY (app/core/docs_registry.py) is the only source of paths —
+# {key} is looked up in it, never joined onto a path, so no value a client
+# sends can reach a file outside the five registered there.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/admin/docs", dependencies=[Depends(require_api_key), Depends(require_role("developer"))])
+async def admin_docs_endpoint():
+    return {"docs": doc_summary()}
+
+
+@app.get("/admin/docs/{key}", dependencies=[Depends(require_api_key), Depends(require_role("developer"))])
+async def admin_doc_endpoint(key: str):
+    text = get_doc_text(key)
+    if text is None:
+        raise HTTPException(status_code=404, detail=f"No doc '{key}'.")
+    return Response(content=text, media_type="text/markdown")

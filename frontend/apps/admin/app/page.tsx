@@ -35,15 +35,17 @@ import ReleasePlanner from "@/components/ReleasePlanner";
 import Walkthrough from "@/components/Walkthrough";
 import ApiLogPanel from "@/admin/ApiLogPanel";
 import DatabasePanel from "@/admin/DatabasePanel";
+import DocsPanel from "@/admin/DocsPanel";
 import ModelsPanel from "@/admin/ModelsPanel";
 import UsersPanel from "@/admin/UsersPanel";
 
-// SHELL_COPY.tabs is shared with apps/client; Users and Models are
+// SHELL_COPY.tabs is shared with apps/client; Users, Models and Docs are
 // developer-only, so they're appended here rather than added to the shared list.
 const TABS = [
   ...SHELL_COPY.tabs,
   { id: "Users" as const, blurb: "Manage developer and client accounts" },
   { id: "Models" as const, blurb: "Which Gemini model each tier uses, and its approved fallbacks" },
+  { id: "Docs" as const, blurb: "The project's own docs, read straight from the repo" },
 ];
 
 type Tab = (typeof TABS)[number]["id"];
@@ -305,6 +307,7 @@ export default function Home() {
         {tab === "Database" && <DatabasePanel />}
         {tab === "Users" && <UsersPanel />}
         {tab === "Models" && <ModelsPanel />}
+        {tab === "Docs" && <DocsPanel />}
       </div>
 
       {/* Both live outside the keyed container: the feed narrates calls from every tab

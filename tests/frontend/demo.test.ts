@@ -83,6 +83,7 @@ const CALLS: [string, RequestInit][] = [
   ["/finalize-calendar/4104?session_id=web-session", { method: "POST", body: "{}" }],
   ["/ingest", { method: "POST" }],
   ["/document?filename=x.pdf", { method: "DELETE" }],
+  ["/admin/docs", {}],
   ["/result/4101", {}],
   ["/history/web-session", {}],
   ["/eval/summary", {}],
@@ -472,6 +473,29 @@ assert.equal(
     .script_text,
   "INT. WAREHOUSE - NIGHT\n\nMAYA edges along the catwalk, torch shaking…",
   "and including edits"
+);
+
+// ---- developer docs viewer ----
+// /admin/docs/{key} returns a raw string, not a JSON object — the one shape
+// the generic CALLS loop above can't check (it asserts every body is an
+// object), so it gets its own asserts here instead, same as the admin table
+// writes above needed their own beyond the generic loop.
+
+const docList = (await demoRequest("/admin/docs", {})) as { docs: { key: string; title: string }[] };
+assert.deepEqual(
+  docList.docs.map((d) => d.key).sort(),
+  ["architecture", "project-guide", "readme", "test-plan", "testing-guide"],
+  "the demo fixture must list the same five docs the real registry does"
+);
+
+const readmeText = (await demoRequest("/admin/docs/readme", {})) as string;
+assert.equal(typeof readmeText, "string", "doc content is raw text, not a wrapped object");
+assert.match(readmeText, /^DEMO DATA/, "demo doc content must say it is demo data, like every other fixture");
+
+await assert.rejects(
+  () => demoRequest("/admin/docs/not-a-real-doc", {}),
+  /No doc/,
+  "an unknown doc key must fail loudly, not resolve to empty content"
 );
 
 // ---- technical API log ----

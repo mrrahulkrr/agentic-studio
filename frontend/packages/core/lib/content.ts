@@ -7,6 +7,9 @@
 //   MIN_SCRIPT_CHARS-> main.py::run_agent_endpoint (min_length)
 //   COUNTRY_NAMES   -> main.py::COUNTRY_DISPLAY_NAMES
 //   TIER_*          -> config.py::TIER_LABELS / TIER_MODELS / TIER_CANDIDATES
+//   DOCS_COPY.docs  -> app/core/docs_registry.py::DOC_REGISTRY (keys + titles only —
+//                      the markdown content itself is never duplicated here, it's
+//                      fetched fresh from GET /admin/docs/{key} on every view)
 
 import type { TaskType } from "@/lib/api";
 
@@ -576,6 +579,28 @@ export const DATABASE_WRITE_COPY = {
   updated: (n: number) => `Saved ${n} ${n === 1 ? "change" : "changes"}.`,
   deletedOne: "Deleted.",
   deletedMany: (n: number, filename: string) => `Deleted all ${n} pieces of “${filename}”.`,
+} as const;
+
+// ---- Docs tab ---------------------------------------------------------------
+// Titles only. The markdown itself is never copied in here — every view fetches
+// it fresh from GET /admin/docs/{key}, which reads the file off disk on every
+// request (see docs_registry.py), so this list can only go stale on its keys
+// and titles, never on the content a reader actually sees.
+
+export const DOCS_COPY = {
+  title: "Developer documentation",
+  intro:
+    "The project's own docs, read straight from the repo on every visit — never a copy that can drift out of date.",
+  loading: "Fetching…",
+  empty: "Nothing to show yet — pick a document above.",
+  /** Order shown in the picker; mirrors DOC_REGISTRY's own key order. */
+  docs: [
+    { key: "readme", title: "README" },
+    { key: "architecture", title: "Architecture" },
+    { key: "project-guide", title: "Project Guide" },
+    { key: "testing-guide", title: "Testing Guide" },
+    { key: "test-plan", title: "Test Plan" },
+  ],
 } as const;
 
 // ---- Technical API log ----------------------------------------------------

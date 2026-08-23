@@ -36,6 +36,38 @@ not shared infrastructure. CORS between the frontends and the backend is
 no longer load-bearing for this topology (see Deployment) since the
 browser only ever talks to its own origin.
 
+```mermaid
+flowchart LR
+    subgraph Browser
+        CB["Client browser"]
+        AB["Admin browser"]
+    end
+
+    subgraph Vercel["Vercel — 2 deployments"]
+        AC["apps/client\nport 3000, own proxy route"]
+        AA["apps/admin\nport 3001, own proxy route"]
+        PC["packages/core\nshared source, no build"]
+        AC -.imports.-> PC
+        AA -.imports.-> PC
+    end
+
+    subgraph Render["Render — 2 services"]
+        BE["app.main:app\nFastAPI backend, port 8000"]
+        A4["agent4_service\nport 8001, A2A skill"]
+    end
+
+    subgraph Supabase
+        DB[("Postgres + pgvector\nRLS on every table")]
+    end
+
+    CB -->|same-origin| AC
+    AB -->|same-origin| AA
+    AC -->|"server-to-server\nX-API-Key + cookie"| BE
+    AA -->|"server-to-server\nX-API-Key + cookie"| BE
+    BE -->|queries| DB
+    BE -->|A2A protocol| A4
+```
+
 **Import/run note:** because every backend module imports via the `app.`
 package prefix (e.g. `from app.core.config import ...`), the backend must be
 run with `backend/` as the working directory / on the Python path — e.g.
@@ -114,6 +146,54 @@ through `ADMIN_TABLES`/the generic admin browser: that browser casts every
 column to text for `?q=` search and returns whole rows, which is fine for
 `cache`/`results` but wrong for a table holding `password_hash`/`salt`.
 
+```mermaid
+erDiagram
+    DOCUMENTS {
+        int id PK
+        text collection
+        text text
+        jsonb metadata
+        vector embedding "768-dim, omitted from admin API payloads"
+    }
+    CACHE {
+        text question PK
+        text answer
+        timestamp created_at
+    }
+    MEMORY {
+        int id PK
+        text session_id
+        text role
+        text content
+        timestamp created_at
+    }
+    RESULTS {
+        int id PK
+        text task
+        text script_text "release_check: date|listing_id"
+        text result
+        timestamp created_at
+    }
+    EVAL_HISTORY {
+        int id PK
+        text task
+        float faithfulness_score
+        timestamp created_at
+    }
+    USERS {
+        int id PK
+        text email UK
+        text password_hash
+        text salt
+        text role
+        timestamp created_at
+    }
+
+    RESULTS ||--o{ RESULTS : "release_check.script_text embeds a release_listing row's id"
+```
+
+*No `FOREIGN KEY` constraints exist anywhere in this schema — every table above is exactly the bare `CREATE TABLE` shown in `_create_schema`. The one relationship drawn is a genuine but app-level-only link: a `release_check` row's `script_text` column stores `"<date>|<listing_result_id>"`, where `listing_result_id` names another `results` row (a `release_listing` result) — parsed back out by `/check-conflicts`, `/confirm-date`, `/override-date`, and `/finalize-calendar`. Postgres does not enforce or know about this link. `memory`, `cache`, and `eval_history` have no queryable relationship to `results` or to each other at all — not even `session_id`, which exists only on `memory` — they're associated purely by being written in the same `record_run` transaction or by matching values a caller supplies, never by a shared key.*
+
 ### app/core/llm.py [synchronous]
 embed_text — embeds via config.py's EMBEDDING_MODEL (default
 gemini-embedding-001), 768 dimensions, retry loop with exponential backoff,
@@ -127,6 +207,79 @@ used by every JSON-producing caller across the codebase (evaluator.py's eval
 functions, and — as of the Greenlight Committee — agents.py's
 check_compliance_structured, generate_script_digest, producer_agent, and
 executive_agent).
+
+generate_for_tier — the seam every tiered call site uses instead of calling
+generate_text directly with a raw model string. config.py defines three
+quality tiers (FAST/STANDARD/QUALITY, in `TIER_MODELS`) plus, per tier, a
+short list of pre-approved alternative models a caller may request instead
+(`TIER_CANDIDATES`). generate_for_tier resolves the tier's configured model
+— or a caller-supplied `model_override`, already validated by the caller
+against `TIER_CANDIDATES` — and calls generate_text with it. Gemini's
+429/RESOURCE_EXHAUSTED is a distinct failure mode from the 503 case above:
+generate_text raises it immediately as `GeminiQuotaExhausted` rather than
+retrying (a retry can't out-wait a daily quota reset within one request)
+and never degrades to the generic "having trouble" fallback string (that
+string reads like a real answer; the caller needs to know this specific
+model can't succeed today). generate_for_tier attaches which tier hit the
+limit to the exception on the way out, since the tier is only known at the
+call site, not inside generate_text itself.
+
+Whether a `GeminiQuotaExhausted` reaches `/run-agent`'s own handler (and
+the 429 dialog below) depends entirely on whether the specific call site's
+existing `try`/`except` wraps the `generate_for_tier` call itself, not just
+the JSON-parse step after it. Only two call sites actually do:
+`evaluator.py::score_faithfulness` and `retrieval.py::gemini_rerank` both
+wrap the `generate_for_tier` call in their own broad `except Exception`,
+by design, so quota exhaustion degrades the same way any other failure
+there does (a `None`-scored eval, an unscored rerank) — this was a
+deliberate choice on both, confirmed in each function's own comments, not
+an accident of a shared helper. `check_compliance`'s *first* call (via
+`safe_generate`) is protected the same way, but its second call — the one
+that generates the actual compliance report — is not. Every other JSON-mode
+caller in `agents.py` (`check_compliance_structured`, `generate_script_digest`,
+`producer_agent`, `executive_agent` — the whole Greenlight Committee) wraps
+only `_parse_json_response(result)` in `try`/`except`, not the
+`generate_for_tier(...)` call that produces `result`; a quota exhaustion
+there raises before that `try` block is even entered, so it is **not**
+caught — it propagates straight through the committee graph to
+`/run-agent`'s handler. So in practice, a quota exhaustion during a
+`greenlight` run (or `analyze`, whose two calls are unwrapped entirely)
+surfaces the 429 dialog rather than degrading; only `compliance`'s
+guideline-search step and any `evaluate=true` scoring degrade silently.
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant Px as Next.js proxy
+    participant BE as main.py (/run-agent)
+    participant SV as supervisor.py / agents.py
+    participant LLM as llm.py generate_for_tier
+
+    FE->>Px: submit run (task, script_text)
+    Px->>BE: POST /run-agent
+    BE->>SV: run_supervisor(...)
+    SV->>LLM: generate_for_tier(tier, ...)
+    LLM->>LLM: resolve model (override or TIER_MODELS[tier])
+    LLM-->>SV: 429 RESOURCE_EXHAUSTED
+
+    alt call wrapped (score_faithfulness, gemini_rerank)
+        SV->>SV: degrade gracefully (fallback value)
+        SV-->>BE: result (degraded)
+        BE-->>FE: 200 with degraded result
+    else call unwrapped (e.g. greenlight, analyze)
+        SV-->>BE: GeminiQuotaExhausted (tier attached)
+        BE->>BE: build 429 body: tier, model_that_failed,\nalternatives from TIER_CANDIDATES[tier]
+        BE-->>Px: 429 + structured body
+        Px-->>FE: 429 + structured body
+        FE->>FE: show rate-limit dialog\n(pick an alternative model)
+        FE->>Px: resubmit POST /run-agent\nwith model_overrides={tier: chosen_model}
+        Px->>BE: POST /run-agent (model_overrides set)
+        BE->>BE: _validate_model_overrides\n(against TIER_CANDIDATES)
+        BE->>SV: run_supervisor(..., model_overrides)
+    end
+```
+
+*This tier system and the 429 dialog it feeds are recent additions with no other prose description in this repo's docs yet; this paragraph and diagram are that description. Which branch a given task takes is per-call-site, not per-task — see the paragraph above for exactly which calls degrade vs. propagate. See also Known Limitation #12.*
 
 ### app/core/resilience.py
 with_retry — decorator for automatic retry with exponential backoff, used
@@ -411,6 +564,35 @@ build_greenlight_committee — digest_node → producer_node → gatekeeper_node
 (conditional from executive_node: mediator_node or back to producer_node)
 → mediator_node → END.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Digest
+
+    Digest: digest_node (script digest)
+    Producer: producer_node (producer_agent)
+    Gatekeeper: gatekeeper_node (compliance + A2A conflict check, cached after round 1)
+    Executive: executive_node (executive_agent)
+    Mediator: mediator_node (verdict, no LLM)
+
+    Digest --> Producer
+    Producer --> Gatekeeper
+
+    state gate_choice <<choice>>
+    Gatekeeper --> gate_choice
+    gate_choice --> Mediator: hard violation, auto-reject
+    gate_choice --> Executive: no hard violation
+
+    state exec_choice <<choice>>
+    Executive --> exec_choice
+    exec_choice --> Mediator: approved
+    exec_choice --> Mediator: stalemate or round 3 reached
+    exec_choice --> Producer: rejected, round < 3
+
+    Mediator --> [*]: RED / YELLOW / GREEN
+```
+
+*Round counting: `iteration_count` increments on every `producer_node` call, so the first pitch is round 1 — the graph allows at most 3 producer→gatekeeper→executive passes before `route_after_executive` forces a `mediator_node` exit regardless of stalemate status.*
+
 run_supervisor(script_text, task) [async] — if task == "greenlight", builds
 and invokes the Greenlight Committee graph with `{"script_text":
 script_text, "iteration_count": 0}` as initial state; otherwise builds and
@@ -503,6 +685,49 @@ access and re-running `seed_admin.py`. There is no self-service password
 change or reset endpoint — an account's password can currently only be set
 at creation time.
 
+```mermaid
+sequenceDiagram
+    participant Br as Browser
+    participant Px as Next.js proxy
+    participant BE as FastAPI backend
+    participant DB as users table
+
+    Note over Br,DB: Login — no gates required
+    Br->>Px: POST /auth/login (email, password)
+    Px->>BE: POST /auth/login
+    BE->>DB: get_user_by_email + verify_password
+    DB-->>BE: user row
+    BE-->>Px: Set-Cookie: session (JWT, 12h)
+    Px-->>Br: Set-Cookie: session
+
+    Note over Br,DB: Later request to /admin/tables/*
+    Br->>Px: GET /admin/tables/documents (cookie)
+    Px->>BE: GET /admin/tables/documents + X-API-Key + session cookie
+
+    BE->>BE: require_api_key checks X-API-Key
+    alt missing/invalid key
+        BE-->>Px: 403
+    else key valid
+        BE->>BE: require_role("developer")
+        BE->>DB: get_user_by_id(session sub)
+        alt no session / decode fails
+            BE-->>Px: 401
+        else user row deleted
+            DB-->>BE: no row
+            BE-->>Px: 401
+        else role != developer
+            DB-->>BE: role = client
+            BE-->>Px: 403
+        else role == developer
+            DB-->>BE: role = developer
+            BE-->>Px: 200 + admin data
+        end
+    end
+    Px-->>Br: response
+```
+
+*The two gates are independent and stacked, not either/or: `require_api_key` runs first (shared-secret header, same on every mutating endpoint); `require_role` runs second and re-reads the session's role from `users` on every call, so a demotion/deletion via `/auth/users` takes effect immediately rather than waiting out the 12h JWT.*
+
 COUNTRY_DISPLAY_NAMES — a display-name-only lookup (US, MX, GB, JP, DE by
 default) used solely to label calendar events; it is not the authoritative
 list of which countries are checked or get events. That role belongs to
@@ -515,6 +740,37 @@ raises for any reason, it logs a warning and falls back to
 calendar_service_account.create_event_via_service_account instead. If
 CALENDAR_MODE is anything else (the default, `"service_account"`), it
 calls the service-account backend directly without attempting MCP at all.
+
+```mermaid
+sequenceDiagram
+    participant M as main.py (_create_calendar_event)
+    participant MCP as calendar_mcp.py (stdio subprocess)
+    participant SA as calendar_service_account.py
+    participant GC as Google Calendar API
+
+    alt CALENDAR_MODE == "mcp"
+        M->>MCP: create_calendar_event_via_mcp()
+        alt MCP succeeds
+            MCP->>GC: create-event
+            GC-->>MCP: event created
+            MCP-->>M: event link
+        else MCP raises (any failure)
+            MCP-->>M: exception
+            M->>M: log warning, fall back
+            M->>SA: create_event_via_service_account()
+            SA->>GC: events.insert
+            GC-->>SA: event created
+            SA-->>M: event link
+        end
+    else CALENDAR_MODE != "mcp" (default)
+        M->>SA: create_event_via_service_account()
+        SA->>GC: events.insert
+        GC-->>SA: event created
+        SA-->>M: event link
+    end
+```
+
+*Known Limitation #6: this covers exactly one failure path (MCP → service-account). There is no further fallback if the service-account path also fails — that exception propagates up uncaught.*
 
 _collect_conflicting_dates / _nearest_clear_date /
 _compute_recommended_dates / _create_events_from_dates — unchanged in
@@ -749,6 +1005,32 @@ main.py receives a request
     event
 ```
 
+```mermaid
+flowchart TD
+    A["POST /run-agent"] --> B{"require_api_key"}
+    B -->|fail| B1["401/403"]
+    B -->|ok| C["guardrails.check_query_safety"]
+    C -->|fail| C1["400"]
+    C -->|ok| D{"cache_get hit?"}
+    D -->|yes| D1["return cached result"]
+    D -->|no| E{"route_node: task"}
+
+    E -->|compliance| F1["check_compliance\nllm.py + retrieval.py (guidelines)"]
+    E -->|analyze| F2["analyze_script\nllm.py + retrieval.py (past_films)"]
+    E -->|release_listing| F3["get_genre_release_listing\nTMDb API, no LLM"]
+    E -->|release_check| F4["split 'date|listing_id'\nresolve genre\ncheck_release_conflicts (no LLM)"]
+
+    F1 --> G["record_run: store result + cache"]
+    F2 --> G
+    F3 --> G
+    F4 --> G
+    G --> H["return AgentResponse"]
+
+    F4 -.->|"confirm/override or\ncheck-conflicts/finalize"| I["check_conflicts_via_a2a\n(Agent 4, over A2A)"]
+    I --> J["compute per-country\nrecommended/shifted dates"]
+    J --> K["create calendar event(s)\nper country"]
+```
+
 **greenlight:**
 ```
 main.py receives a request
@@ -878,14 +1160,30 @@ see the Known Limitations note before deploying if one is ever added.
     It's bypassed entirely for `greenlight` and `analyze` tasks by design.
 11. INJECTION_PATTERNS remains a finite literal-phrase list; novel
     injection phrasings not on the list still get through undetected.
-12. The Gemini API's free/low tiers can cap generate_content requests per
-    project; once exhausted, calls fail with a 429 RESOURCE_EXHAUSTED
-    error, which llm.py's generate_text does not retry (its retry logic
-    only covers 503/UNAVAILABLE). Callers using safe_generate
-    (check_compliance) or a full try/except (evaluator.py, retrieval.py's
-    gemini_rerank, and — as of the Greenlight Committee — every function
-    in agents.py that calls _parse_json_response) degrade gracefully;
-    analyze_script's direct generate_text calls do not.
+12. **Partially resolved — and the pre-existing text below undercounted
+    which callers actually degrade gracefully, for the same reason before
+    and after this change.** The Gemini API's free/low tiers can cap
+    generate_content requests per project; once exhausted, calls raise a
+    typed `GeminiQuotaExhausted` (llm.py) instead of being silently
+    unretried. `/run-agent` and `/ingest` catch it and return a structured
+    429 body naming the tier and its approved alternative models
+    (config.TIER_CANDIDATES), which the frontend's rate-limit dialog uses
+    to resubmit with `model_overrides` — see the tier-system paragraph and
+    sequence diagram in this file's `app/core/llm.py` section for the full
+    flow. Whether a given call degrades gracefully or reaches that dialog
+    depends on whether its own `try`/`except` wraps the `generate_for_tier`
+    call itself — and, checked directly against the current code, only
+    `evaluator.py::score_faithfulness` and `retrieval.py::gemini_rerank` do
+    that (both by deliberate design, per their own comments). `check_compliance`'s
+    first call is protected the same way (via `safe_generate`), but its second
+    call is not. Every Greenlight Committee function
+    (`check_compliance_structured`, `generate_script_digest`, `producer_agent`,
+    `executive_agent`) wraps only the JSON-parse step in `try`/`except`, not the
+    `generate_for_tier` call that precedes it — this was already true before
+    tiers existed, it just had no distinctly-typed exception to expose it. So a
+    quota exhaustion during any of these, or during either of `analyze_script`'s
+    two unwrapped calls, propagates and now surfaces the 429 dialog; it
+    previously propagated as a bare, unhandled exception instead.
 13. /finalize-calendar recomputes recommended dates itself rather than
     reusing whatever /check-conflicts returned earlier, so if Agent 4's
     underlying data changes between the two calls, the actually-created
