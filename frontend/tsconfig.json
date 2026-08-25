@@ -20,22 +20,18 @@
       }
     ],
     "paths": {
-      // Points into ../../packages/core, the code this app shares with apps/admin —
-      // see packages/core/README.md. Not a real npm package: plain filesystem paths,
-      // compiled as ordinary source, same as anything under this app's own tree.
-      "@/lib/*": ["../../packages/core/lib/*"],
-      "@/components/*": ["../../packages/core/components/*"]
+      "@/lib/*": ["./src/lib/*"],
+      "@/components/*": ["./src/components/*"],
+      "@/admin/*": ["./src/components/admin/*"]
     }
   },
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    "../../packages/core/**/*.ts",
-    "../../packages/core/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.mts",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    ".next/dev/types/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }

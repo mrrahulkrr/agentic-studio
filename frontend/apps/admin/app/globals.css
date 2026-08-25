@@ -1,3 +1,0 @@
-/* Design tokens live once, in packages/core/globals.css — apps/admin imports
-   the same file. Edit there, not here. */
-@import "../../../packages/core/globals.css";

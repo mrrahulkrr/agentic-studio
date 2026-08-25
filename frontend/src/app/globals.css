@@ -1,27 +1,10 @@
 @import "tailwindcss";
 
-/* Tailwind v4's automatic class scanner only walks the directory that holds
-   the stylesheet with `@import "tailwindcss"` — this file, so packages/core
-   and below. It never crosses into the sibling apps/client or apps/admin
-   trees, even though each app's own layout.tsx/page.tsx/components import
-   this same file. Left implicit, every class used only inside an app (not
-   re-used from packages/core) is silently missing from the generated CSS —
-   this is what breaks page layout, not just the ink-/iris- tokens below.
-   NOTE: adding any explicit `@source "path"` disables Tailwind's automatic
-   detection of this file's own directory — so packages/core has to be
-   listed explicitly too (as ".") or every class used only there vanishes
-   right along with the gap this was meant to close. */
-@source ".";
-@source "../../apps/client";
-@source "../../apps/admin";
-
-/* Tailwind's content scanner silently drops some ink-/iris- utility candidates
-   from this monorepo's cross-package imports (packages/core scanned from each
-   app's turbopack root) even though they're used as plain static strings —
-   confirmed in both dev and production builds. Safelisting them here forces
-   generation regardless of what the scanner finds. If Tailwind/Turbopack fixes
-   the scan gap, this becomes a no-op — safe to leave in place either way. */
-@source inline("accent-iris-500 bg-ink-400 bg-ink-600 bg-ink-950 bg-ink-950/40 bg-ink-950/55 bg-ink-950/60 bg-iris-400 bg-iris-400/10 bg-iris-400/12 bg-iris-400/70 bg-iris-400/8 bg-iris-500 bg-iris-500/10 bg-iris-500/18 bg-iris-600 border-iris-400/20 border-iris-400/25 border-iris-400/30 border-iris-400/40 border-iris-400/50 border-iris-400/60 border-iris-500/30 focus:bg-ink-950/80 focus:border-iris-400 focus:border-iris-400/60 from-iris-400 hover:bg-iris-400 hover:bg-iris-500 hover:border-iris-400/40 hover:border-iris-400/50 hover:border-iris-400/60 hover:text-ink-100 hover:text-ink-50 hover:text-iris-100 hover:text-iris-300 placeholder:text-ink-500 rounded-[var(--radius-control)] rounded-[var(--radius-surface)] rounded-[var(--radius-panel)] rounded-[var(--radius-hero)] !rounded-[var(--radius-hero)] text-body text-display text-heading text-ink-100 text-ink-200 text-ink-300 text-ink-400 text-ink-50 text-ink-500 text-ink-600 text-ink-800 text-ink-850 text-iris-100 text-iris-200 text-iris-200/90 text-iris-300 text-iris-300/70 text-iris-300/80 to-iris-600 via-iris-400/40");
+/* Single unified source tree. Tailwind auto-scans src/app/ (where this file
+   lives). The explicit @source covers the sibling directories — components
+   and lib — that the scanner would otherwise miss because they are not
+   subdirectories of app/. No safelisting needed: everything is reachable. */
+@source "../components";
 
 /* ============================================================================
    Agentic Studio — design tokens

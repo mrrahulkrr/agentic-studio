@@ -23,8 +23,8 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Default metadata; route groups (client) and (admin)/admin override title.
 export const metadata: Metadata = {
-  title: "Agentic Studio",
   description: "AI studio operations platform — compliance, analysis, and release scheduling agents",
 };
 
