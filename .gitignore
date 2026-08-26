@@ -10,3 +10,6 @@ __pycache__/
 .claude/
 openspec/
 .idea/
+node_modules/
+.next/
+*.tsbuildinfo

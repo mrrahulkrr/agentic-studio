@@ -68,12 +68,19 @@ def build_supervisor():
 async def run_supervisor(script_text: str, task: str):
     if task == "greenlight":
         graph = build_greenlight_committee()
-        initial_state = {"script_text": script_text, "iteration_count": 0}
+        initial_state = {
+            "script_text": script_text,
+            "iteration_count": 0,
+        }
         result_state = await graph.ainvoke(initial_state)
         return {"result": result_state["result"], "task": task}
 
     graph = build_supervisor()
-    initial_state = {"script_text": script_text, "task": task, "result": ""}
+    initial_state = {
+        "script_text": script_text,
+        "task": task,
+        "result": "",
+    }
     return await graph.ainvoke(initial_state)
 
 
@@ -94,11 +101,11 @@ class CommitteeState(TypedDict, total=False):
 async def digest_node(state: CommitteeState) -> CommitteeState:
     digest = generate_script_digest(state["script_text"])
     state["script_digest"] = digest
-    
+
     trace = state.get("trace", [])
     trace.append("Script condensed via summarizer LLM")
     state["trace"] = trace
-    
+
     return state
 
 
@@ -106,7 +113,7 @@ async def producer_node(state: CommitteeState) -> CommitteeState:
     rejections = []
     if "executive_review" in state and state["executive_review"]:
         rejections = state["executive_review"].get("concern_list", [])
-    
+
     pitch = producer_agent(state.get("script_digest", {}), rejections)
     state["producer_pitch"] = pitch
     state["iteration_count"] = state.get("iteration_count", 0) + 1
@@ -116,9 +123,11 @@ async def producer_node(state: CommitteeState) -> CommitteeState:
 async def gatekeeper_node(state: CommitteeState) -> CommitteeState:
     trace = state.get("trace", [])
     if "compliance_data" not in state or not state["compliance_data"]:
-        state["compliance_data"] = check_compliance_structured(state["script_text"])
+        state["compliance_data"] = check_compliance_structured(
+            state["script_text"]
+        )
         trace.append("Compliance checks fetched and mapped")
-    
+
     if "date_conflict_data" not in state or not state["date_conflict_data"]:
         proposed_date = state.get("producer_pitch", {}).get("pitch_fields", {}).get("proposed_release_date", "2026-12-25")
         try:
@@ -127,7 +136,7 @@ async def gatekeeper_node(state: CommitteeState) -> CommitteeState:
             trace.append("Agent 4 queried for calendar conflicts")
         except Exception:
             state["date_conflict_data"] = {}
-            
+
     state["trace"] = trace
 
     hard_violations = state["compliance_data"].get("hard_violations", [])
@@ -160,7 +169,7 @@ async def executive_node(state: CommitteeState) -> CommitteeState:
         state["previous_concerns"] = state["executive_review"].get("concern_list", [])
     else:
         state["previous_concerns"] = []
-        
+
     state["executive_review"] = review
     return state
 

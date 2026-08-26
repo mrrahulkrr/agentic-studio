@@ -1,7 +1,7 @@
 import re
 from datetime import date, datetime
 import httpx
-from app.core.llm import generate_text
+from app.core.llm import generate_text, generate_for_tier
 from app.core.guardrails import check_retrieval_confidence, retrieval_status
 from app.data.retrieval import hybrid_search
 from app.core.resilience import safe_generate, logger
@@ -44,7 +44,9 @@ def check_compliance(script_text: str) -> str:
 Identify any moments that may need compliance review (violence, language, sensitive content).
 For each one, state what guideline topic to check (e.g. "graphic violence rules")."""
 
-    flagged_topics = safe_generate(generate_text, system_prompt, script_text)
+    flagged_topics = safe_generate(
+        generate_for_tier, "FAST", system_prompt, script_text,
+    )
 
     guideline_matches = hybrid_search(flagged_topics, collection="guidelines", top_k=3)
     status = retrieval_status(guideline_matches)
@@ -83,7 +85,9 @@ Relevant guidelines found:
 
 Based on these guidelines, list specific compliance concerns with citations to which guideline applies."""
 
-    return generate_text("You are a compliance report generator.", final_prompt) + caveat
+    return generate_for_tier(
+        "STANDARD", "You are a compliance report generator.", final_prompt,
+    ) + caveat
 
 
 def analyze_script(script_text: str) -> str:
@@ -93,7 +97,9 @@ def analyze_script(script_text: str) -> str:
 - Character clarity score (1-10) with specific reasoning
 - Key structural strengths and weaknesses"""
 
-    direct_analysis = generate_text("You are a script analyst.", direct_analysis_prompt + "\n\n" + script_text)
+    direct_analysis = generate_for_tier(
+        "STANDARD", "You are a script analyst.", direct_analysis_prompt + "\n\n" + script_text,
+    )
 
     comparables = hybrid_search(direct_analysis, collection="past_films", top_k=3)
     status = retrieval_status(comparables)
@@ -116,7 +122,9 @@ Comparable past films:
 Based on both, give specific, actionable suggestions for improvement, and a final 
 recommendation: Pass / Consider / Recommend, with reasoning grounded in the comparable films where available."""
 
-    return generate_text("You are a senior script analyst giving a greenlight recommendation.", final_prompt)
+    return generate_for_tier(
+        "STANDARD", "You are a senior script analyst giving a greenlight recommendation.", final_prompt,
+    )
 
 
 
@@ -265,25 +273,63 @@ async def check_conflicts_via_a2a(date_str: str) -> dict:
 
 
 def check_compliance_structured(script_text: str) -> dict:
-    flagged_topics = safe_generate(generate_text, "Identify topics that need compliance review.", script_text)
+    flagged_topics = safe_generate(
+        generate_for_tier, "FAST", "Identify topics that need compliance review.", script_text,
+    )
     guideline_matches = hybrid_search(flagged_topics, collection="guidelines", top_k=3)
-    
-    if not check_retrieval_confidence(guideline_matches):
-        return {"hard_violations": [], "soft_violations": [], "message": "No guidelines found."}
-        
+    status = retrieval_status(guideline_matches)
+
+    if status == "empty":
+        return {
+            "hard_violations": [],
+            "soft_violations": [],
+            "message": "No guideline documents matched this content.",
+        }
+
+    if status == "low_relevance":
+        return {
+            "hard_violations": [],
+            "soft_violations": [],
+            "message": "Guidelines were searched, but none were relevant enough to this content to cite responsibly.",
+        }
+
+    # "unscored" means documents were retrieved but the reranker could not rank
+    # them — distinct from "empty"/"low_relevance", and must stay distinct:
+    # collapsing it back into a boolean here was the bug (a reranker outage read
+    # to the gatekeeper exactly like an empty knowledge base).
+    caveat = ""
+    if status == "unscored":
+        logger.warning("Structured compliance check produced without relevance scoring")
+        caveat = "Automatic relevance ranking was unavailable, so this check ran unscored — verify manually."
+
     context = "\n".join(f"- {m['text']}" for m in guideline_matches)
     prompt = f"Script flagged: {flagged_topics}\nGuidelines: {context}\nIdentify any strict/hard violations and soft/borderline violations based on these guidelines. Return strict JSON with 'hard_violations' (list of strings) and 'soft_violations' (list of strings)."
-    
-    result = generate_text("You are a compliance checker. Output strict JSON with lists 'hard_violations' and 'soft_violations'.", prompt, response_json=True)
+
+    result = generate_for_tier(
+        "STANDARD",
+        "You are a compliance checker. Output strict JSON with lists 'hard_violations' and 'soft_violations'.",
+        prompt,
+        response_json=True,
+    )
     try:
-        return _parse_json_response(result)
+        parsed = _parse_json_response(result)
     except Exception:
-        return {"hard_violations": [], "soft_violations": [], "message": "Failed to parse compliance"}
+        parsed = {"hard_violations": [], "soft_violations": [], "message": "Failed to parse compliance"}
+
+    if caveat:
+        parsed["message"] = f"{parsed['message']} {caveat}" if parsed.get("message") else caveat
+
+    return parsed
 
 
 def generate_script_digest(script_text: str) -> dict:
     prompt = f"Condense the following script into a digest containing 'genre', 'tone', 'rating_relevant_content' (list), and 'marketable_hooks' (list). Script: {script_text}"
-    result = generate_text("You are a script summarizer. Output strict JSON with 'genre', 'tone', 'rating_relevant_content', and 'marketable_hooks'.", prompt, response_json=True)
+    result = generate_for_tier(
+        "STANDARD",
+        "You are a script summarizer. Output strict JSON with 'genre', 'tone', 'rating_relevant_content', and 'marketable_hooks'.",
+        prompt,
+        response_json=True,
+    )
     try:
         return _parse_json_response(result)
     except Exception:
@@ -297,25 +343,39 @@ def generate_script_digest(script_text: str) -> dict:
         }
 
 
-def producer_agent(script_digest: dict, executive_rejections: list[str] = None) -> dict:
+def producer_agent(
+    script_digest: dict,
+    executive_rejections: list[str] = None,
+) -> dict:
     prompt = f"Script digest: {json.dumps(script_digest)}\n"
     if executive_rejections:
         prompt += f"Previous executive rejections to address: {json.dumps(executive_rejections)}\n"
-    
+
     prompt += "Pitch this script focusing on marketability and mitigating any previous concerns. Output strict JSON with 'pitch_fields' (dict containing EXACT keys: 'title_concept', 'strengths' (list), 'target_demographic', 'budget_tier', 'mitigation_plan', 'proposed_release_date' (YYYY-MM-DD)) and 'strategy' (string)."
-    
-    result = generate_text("You are a passionate film producer. Output strict JSON.", prompt, response_json=True)
+
+    result = generate_for_tier(
+        "STANDARD", "You are a passionate film producer. Output strict JSON.", prompt,
+        response_json=True,
+    )
     try:
         return _parse_json_response(result)
     except Exception:
         return {"pitch_fields": {}, "strategy": "Error generating pitch"}
 
 
-def executive_agent(script_digest: dict, producer_pitch: dict, compliance_data: dict, date_conflict_data: dict) -> dict:
+def executive_agent(
+    script_digest: dict,
+    producer_pitch: dict,
+    compliance_data: dict,
+    date_conflict_data: dict,
+) -> dict:
     prompt = f"Script digest: {json.dumps(script_digest)}\nProducer Pitch: {json.dumps(producer_pitch)}\nCompliance Data: {json.dumps(compliance_data)}\nDate Conflicts: {json.dumps(date_conflict_data)}\n"
     prompt += "Evaluate the pitch against the data. Output strict JSON with 'concern_list' (list of strings), 'is_approved' (boolean), and 'message' (string explaining the decision)."
-    
-    result = generate_text("You are a pragmatic studio executive. Output strict JSON.", prompt, response_json=True)
+
+    result = generate_for_tier(
+        "QUALITY", "You are a pragmatic studio executive. Output strict JSON.", prompt,
+        response_json=True,
+    )
     try:
         return _parse_json_response(result)
     except Exception:

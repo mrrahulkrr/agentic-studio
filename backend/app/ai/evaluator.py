@@ -1,4 +1,4 @@
-from app.core.llm import generate_text
+from app.core.llm import generate_text, generate_for_tier
 import json
 import re
 
@@ -36,7 +36,8 @@ Analysis: {agent_result}
 Respond ONLY with JSON: {{"score": <number>, "reasoning": "<why>"}}"""
 
     try:
-        response = generate_text(
+        response = generate_for_tier(
+            "QUALITY",
             "You are an evaluation system. Respond only with valid JSON.",
             prompt,
             temperature=0.0,

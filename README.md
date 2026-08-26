@@ -21,7 +21,7 @@ A multi-agent AI platform for film & TV script evaluation, built with **FastAPI*
 
 ## 🏗️ Project Structure
 
-Two frontends now — a client app and a developer app — sharing one component/lib package, sitting in front of the same two backend services:
+A unified Next.js frontend sitting in front of two backend services:
 
 ```
 agentic-studio/
@@ -52,19 +52,15 @@ agentic-studio/
 │       └── agent4_service.py                # Standalone A2A server (port 8001) — holiday & event conflict checker
 │
 └── frontend/
-    ├── packages/core/                       # Shared code — not an npm package, see its own README
-    │   ├── lib/api.ts                       # Every typed backend call (fetch wrappers, TypeScript interfaces)
-    │   ├── lib/session.ts                   # useSession() — login/role gate hook
-    │   ├── lib/proxy.ts                     # Same-origin backend proxy both apps re-export
-    │   └── components/                      # Every panel that isn't developer-only, + LoginForm, + ui.tsx
-    ├── apps/client/                         # Start here · Documents · Agents · Release Planner · History · Insights
-    │   └── app/page.tsx                     # Shell: header, mode toggle, health poll, login gate, tabs
-    └── apps/admin/                          # Everything client has, + Database, API Log, Users
-        ├── app/page.tsx                     # Same shell + the 3 admin-only tabs + developer-role check
-        └── components/                      # Admin-only: DatabasePanel, DatabaseEditor, ApiLogPanel, UsersPanel
-```
+    ├── src/
+    │   ├── app/
+    │   │   ├── page.tsx                     # Shell: header, mode toggle, health poll, login gate, tabs
+    │   │   ├── api/proxy/[...path]/route.ts # Same-origin backend proxy
+    │   │   └── admin/page.tsx               # Admin-only routes
+    │   ├── components/                      # All panels (Agents, Database, Release Planner, etc.)
+    │   └── lib/                             # Typed backend calls, hooks, utils
 
-Neither frontend calls the backend directly from the browser — each proxies through its own Next.js server route (`app/api/proxy/[...path]/route.ts`), which is also where the shared API key gets attached, server-side, so it never reaches client JS.
+The frontend doesn't call the backend directly from the browser — it proxies through its own Next.js server route (`app/api/proxy/[...path]/route.ts`), which is also where the shared API key gets attached, server-side, so it never reaches client JS.
 
 ---
 
@@ -291,27 +287,27 @@ python seed_admin.py you@studio.com
 
 Every account after that is created from the developer app's Users tab.
 
-### 4. Frontend Setup — two apps, each its own install
+### 4. Frontend Setup
 
 ```bash
-cd frontend/apps/client && npm install
-cd frontend/apps/admin && npm install
+cd frontend
+npm install
 ```
 
-Each app gets its own `.env.local` (**not** `frontend/.env` — and not `NEXT_PUBLIC_`-prefixed, since these are read server-side only, by the app's own proxy route):
+The frontend gets its own `.env.local` (not `NEXT_PUBLIC_`-prefixed, since these are read server-side only by the app's proxy route):
 
 ```env
-# frontend/apps/client/.env.local  (and the same in apps/admin/.env.local)
+# frontend/.env.local
 BACKEND_API_URL=http://localhost:8000
 BACKEND_API_KEY=your_secret_key
 ```
 
 ```bash
-cd frontend/apps/client && npm run dev   # http://localhost:3000
-cd frontend/apps/admin  && npm run dev   # http://localhost:3001
+cd frontend
+npm run dev   # http://localhost:3000
 ```
 
-Log in with the account from step 3. The client app gets the working pipelines; the developer app gets those plus the database browser, API log, and user management — enforced both by the UI (which app you're in) and by the backend (`require_role("developer")` on the admin-only routes, so a client-role session can't reach them even by calling the API directly).
+Log in with the account from step 3. The frontend unifies the client and developer tools into one app — enforced both by the UI (showing different tabs based on your role) and by the backend (`require_role("developer")` on the admin-only routes).
 
 ---
 

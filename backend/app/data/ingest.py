@@ -1,4 +1,4 @@
-from app.core.llm import embed_text, generate_text
+from app.core.llm import embed_text, generate_for_tier
 from app.data.database import document_exists, insert_document
 
 
@@ -9,7 +9,7 @@ Respond with ONLY the category word, nothing else.
 
 Text: {chunk_text}"""
 
-    result = generate_text("You are a document classifier.", prompt)
+    result = generate_for_tier("FAST", "You are a document classifier.", prompt)
     result = result.strip().lower()
 
     if result in ["guidelines", "past_films", "scripts"]:

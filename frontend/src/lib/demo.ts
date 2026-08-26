@@ -21,6 +21,7 @@ import type {
   EvalSummary,
   HistoryTurn,
 } from "@/lib/api";
+import { TIER_CANDIDATES, TIER_LABELS } from "./content.ts";
 
 // ---- The flag ------------------------------------------------------------
 // Shaped for useSyncExternalStore, which is how the app reads external state
@@ -313,6 +314,36 @@ const DEMO_EVENTS: Record<string, { date: string; calendar_event: string }> = {
   DE: { date: "2026-11-20", calendar_event: "https://calendar.google.com/calendar/u/0/r/day/2026/11/20" },
 };
 
+// ---- Developer docs viewer -------------------------------------------------
+// A short sample per doc, not the real file — Demo Mode never touches the
+// backend (see this file's header), and the real backend endpoint reads the
+// actual repo file fresh on every request (docs_registry.py); a static demo
+// sample can't claim to be that. It just has to exist so DocsPanel doesn't
+// throw with Demo Mode on.
+
+const DOCS_FIXTURE: Record<string, { title: string; text: string }> = {
+  readme: {
+    title: "README",
+    text: `${LABEL}\n\n# Agentic Studio\n\nScript intelligence and release strategy, in one place. In Demo Mode this pane shows a short sample instead of the real file — switch Demo Mode off to read the project's actual README.`,
+  },
+  architecture: {
+    title: "Architecture",
+    text: `${LABEL}\n\n# Architecture\n\nTwo FastAPI services plus two Next.js frontends. See a real run of this tab (Demo Mode off) for the actual document, diagrams included.\n\n\`\`\`mermaid\nflowchart LR\n  Frontend --> Backend --> Database\n\`\`\``,
+  },
+  "project-guide": {
+    title: "Project Guide",
+    text: `${LABEL}\n\n# Project Guide\n\nSetup, env vars and endpoint contracts live in the real document. This is a placeholder so the Docs tab has something to show in Demo Mode.`,
+  },
+  "testing-guide": {
+    title: "Testing Guide",
+    text: `${LABEL}\n\n# Testing Guide\n\nHow to run and extend \`./run_tests.sh\`. See the real file (Demo Mode off) for the full walkthrough.`,
+  },
+  "test-plan": {
+    title: "Test Plan",
+    text: `${LABEL}\n\n# Test Plan\n\nRisk rationale and per-file coverage. See the real file (Demo Mode off) for the full mapping.`,
+  },
+};
+
 // ---- Admin table browser -------------------------------------------------
 // Column metadata mirrors what information_schema returns for the real tables,
 // including which columns the backend flags as structural — the Database tab
@@ -513,6 +544,36 @@ const ROUTES: [string, RegExp, Handler][] = [
     },
   ],
 
+  // Simulates a Gemini quota exhaustion. Not a real endpoint — only ever
+  // reached through api.ts::simulateQuotaExceeded(), which only
+  // AgentsPanel's Demo-Mode-only trigger button calls. Deliberately the
+  // STANDARD tier: one of the 8 (of 12) call sites that actually propagate
+  // a quota failure up to the endpoint rather than degrading silently
+  // (check_compliance_structured/gemini_rerank/score_faithfulness's own
+  // "flag topics" and rerank/eval calls swallow it like any other failure,
+  // by existing design — simulating one of those here would demonstrate a
+  // dialog that can never actually appear for real).
+  [
+    "POST",
+    /^\/run-agent\/simulate-quota-limit$/,
+    () => {
+      const tier = "STANDARD" as const;
+      const failedModel = TIER_CANDIDATES[tier][0].model;
+      throw {
+        __demoApiError: true,
+        status: 429,
+        detail: {
+          error_type: "gemini_quota_exhausted",
+          tier,
+          tier_label: TIER_LABELS[tier],
+          model_that_failed: failedModel,
+          alternatives: TIER_CANDIDATES[tier].filter((c) => c.model !== failedModel),
+          message: `The ${TIER_LABELS[tier].toLowerCase()} model has hit today's free usage limit. Pick another option to continue, or try again after the limit resets.`,
+        },
+      };
+    },
+  ],
+
   [
     "POST",
     /^\/check-conflicts\/(\d+)$/,
@@ -551,6 +612,26 @@ const ROUTES: [string, RegExp, Handler][] = [
 
   ["POST", /^\/ingest$/, () => ({ inserted_chunks: 24, ids: [9001, 9002, 9003] })],
   ["DELETE", /^\/document$/, () => ({ deleted_chunks: 24 })],
+
+  [
+    "GET",
+    /^\/admin\/docs$/,
+    () => ({
+      docs: Object.entries(DOCS_FIXTURE).map(([key, spec]) => ({ key, title: spec.title })),
+    }),
+  ],
+
+  [
+    "GET",
+    /^\/admin\/docs\/([a-z-]+)$/,
+    (m) => {
+      const spec = DOCS_FIXTURE[m[1]];
+      if (!spec) throw new Error(`No doc '${m[1]}'.`);
+      // A plain string, not a wrapped object — matches what the real endpoint
+      // returns (raw markdown, not JSON) and what api.ts::getDoc() expects.
+      return spec.text;
+    },
+  ],
 
   [
     "GET",

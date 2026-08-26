@@ -1,6 +1,6 @@
 // Every call into the Agentic Studio backend (main.py) lives in this file.
 
-import { DEMO_COPY } from "@/lib/content";
+import { DEMO_COPY, type ModelTier } from "@/lib/content";
 import { demoRequest, isDemo } from "@/lib/demo";
 import { DOWNLOAD_DESCRIPTION, narrateRequest, startActivity } from "@/lib/activity";
 import { logApiEnd, logApiStart } from "@/lib/apilog";
@@ -173,13 +173,56 @@ export interface AdminListResponse {
   rows: AdminRow[];
 }
 
+// ---- Model quota fallback ----
+// The one structured error shape in the app: every other endpoint's error
+// detail is a plain string. This one carries which tier hit its limit and
+// what to try instead, so the caller can render the rate-limit dialog
+// (ui.tsx::QuotaDialog) instead of the ordinary passive ErrorAlert.
+
+export interface QuotaAlternative {
+  model: string;
+  description: string;
+}
+
+export interface QuotaExhaustedDetail {
+  error_type: "gemini_quota_exhausted";
+  tier: ModelTier;
+  tier_label: string;
+  model_that_failed: string;
+  alternatives: QuotaAlternative[];
+  message: string;
+}
+
 class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The raw `detail` from the response body, when it was an object rather
+   * than a plain string — e.g. a QuotaExhaustedDetail. Most callers never
+   * need this; `message` already reads fine on its own for every shape. */
+  detail?: unknown;
+  constructor(status: number, message: string, detail?: unknown) {
     super(message);
     this.status = status;
+    this.detail = detail;
     this.name = "ApiError";
   }
+}
+
+/** Narrows an unknown catch-clause error down to the quota-exhausted shape,
+ * or null for every other kind of failure. */
+export function quotaExhaustedDetail(err: unknown): QuotaExhaustedDetail | null {
+  if (!(err instanceof ApiError) || !err.detail || typeof err.detail !== "object") return null;
+  const detail = err.detail as Record<string, unknown>;
+  return detail.error_type === "gemini_quota_exhausted" ? (detail as unknown as QuotaExhaustedDetail) : null;
+}
+
+/** What lib/demo.ts's quota-exhausted fixture throws in place of resolving. */
+function isDemoApiError(err: unknown): err is { status: number; detail: QuotaExhaustedDetail } {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    "__demoApiError" in err &&
+    (err as { __demoApiError?: unknown }).__demoApiError === true
+  );
 }
 
 /**
@@ -194,9 +237,14 @@ async function request<T>(path: string, options: RequestInit = {}, authed = fals
   try {
     let body: unknown;
     if (isDemo()) {
-      body = await demoRequest(path, options);
-      // Fixtures have no HTTP status of their own; the entry is flagged as simulated
-      // so the log never passes a made-up 200 off as a real one.
+      try {
+        body = await demoRequest(path, options);
+      } catch (err) {
+        // The one fixture that simulates a failure (quota-exhausted demo trigger)
+        // throws a tagged plain shape instead of an ApiError — demo.ts has no
+        // runtime import of ApiError. Converted here so downstream sees a real ApiError.
+        throw isDemoApiError(err) ? new ApiError(err.status, err.detail.message, err.detail) : err;
+      }
       logApiEnd(logId, { status: 200, ok: true, response: body });
     } else {
       body = await liveRequest(path, options, authed, logId);
@@ -217,9 +265,6 @@ async function request<T>(path: string, options: RequestInit = {}, authed = fals
 async function liveRequest(
   path: string,
   options: RequestInit,
-  // ponytail: the proxy attaches X-API-Key server-side now (see proxy.ts), so
-  // this no longer does anything. Left in place rather than touching the ~15
-  // call sites that pass it — worth deleting next time those are edited anyway.
   authed: boolean,
   logId: number
 ): Promise<unknown> {
@@ -231,13 +276,23 @@ async function liveRequest(
   }
 
   const contentType = res.headers.get("content-type") ?? "";
-  const body = contentType.includes("application/json") ? await res.json().catch(() => null) : null;
+  // /admin/docs/{key} returns text/markdown on success; error path is still JSON.
+  const body = contentType.includes("application/json")
+    ? await res.json().catch(() => null)
+    : contentType.includes("text/markdown")
+    ? await res.text()
+    : null;
 
   if (!res.ok) {
     const detail = body?.detail ?? body?.error ?? res.statusText;
-    throw new ApiError(res.status, typeof detail === "string" ? detail : JSON.stringify(detail));
+    const message =
+      typeof detail === "string"
+        ? detail
+        : detail && typeof detail === "object" && typeof (detail as { message?: unknown }).message === "string"
+        ? (detail as { message: string }).message
+        : JSON.stringify(detail);
+    throw new ApiError(res.status, message, detail);
   }
-  // Settled here rather than in request(), because this is where the real status is.
   logApiEnd(logId, { status: res.status, ok: true, response: body });
   return body;
 }
@@ -250,18 +305,32 @@ export function checkHealth() {
 
 // ---- Agents ----
 
-export function runAgent(scriptText: string, task: TaskType, sessionId: string, evaluate: boolean) {
+export function runAgent(
+  scriptText: string,
+  task: TaskType,
+  sessionId: string,
+  evaluate: boolean,
+  modelOverrides?: Partial<Record<ModelTier, string>>
+) {
   const form = new URLSearchParams({
     script_text: scriptText,
     task,
     session_id: sessionId,
     evaluate: String(evaluate),
   });
+  if (modelOverrides && Object.keys(modelOverrides).length > 0) {
+    form.set("model_overrides", JSON.stringify(modelOverrides));
+  }
   return request<AgentResponse>(
     "/run-agent",
     { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form },
     true
   );
+}
+
+/** Demo-only: triggers the rate-limit dialog with a simulated quota-exhausted error. */
+export function simulateQuotaExceeded() {
+  return request<AgentResponse>("/run-agent/simulate-quota-limit", { method: "POST" }, true);
 }
 
 export function checkConflicts(resultId: number, sessionId: string = "default") {
@@ -417,6 +486,23 @@ export function getAdminRows(
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (query.trim()) params.set("q", query.trim());
   return request<AdminListResponse>(`/admin/tables/${table}?${params}`, {}, true);
+}
+
+// ---- Developer docs viewer ----
+// Same gate as the admin table browser above (require_api_key + require_role "developer").
+
+export interface DocEntry {
+  key: string;
+  title: string;
+}
+
+export function listDocs() {
+  return request<{ docs: DocEntry[] }>("/admin/docs", {}, true);
+}
+
+/** Raw markdown text, not JSON — see liveRequest's text/markdown branch. */
+export function getDoc(key: string) {
+  return request<string>(`/admin/docs/${encodeURIComponent(key)}`, {}, true);
 }
 
 // ---- Auth ----

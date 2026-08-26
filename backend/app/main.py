@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime, timedelta
 from uuid import uuid4
 import httpx
-from app.core.config import MAX_UPLOAD_FILE_SIZE_MB, AGENT4_BASE_URL, CALENDAR_MODE, API_SECRET_KEY, SUPPORTED_COUNTRIES
+from app.core.config import MAX_UPLOAD_FILE_SIZE_MB, AGENT4_BASE_URL, CALENDAR_MODE, API_SECRET_KEY, SUPPORTED_COUNTRIES, TIER_CANDIDATES, TIER_LABELS
 from app.data.database import (
     init_tables, get_result, connection, record_run,
     get_result_with_script, delete_documents_by_filename, cache_get,
@@ -28,6 +28,8 @@ from app.ai.agents import resolve_genre_from_listing, check_conflicts_via_a2a
 from app.core.guardrails import check_query_safety
 from app.ai.evaluator import score_faithfulness
 from app.core.resilience import check_rate_limit, logger
+from app.core.llm import generate_for_tier, current_model_overrides, GeminiQuotaExhausted
+from app.core.docs_registry import doc_summary, get_doc_text
 from app.schemas import TaskType, AgentResponse
 from fastapi.responses import Response
 from reportlab.lib.pagesizes import letter
@@ -63,6 +65,59 @@ async def global_exception_handler(request, exc):
 def require_api_key(x_api_key: str | None = Header(default=None)):
     if not API_SECRET_KEY or not x_api_key or not secrets.compare_digest(x_api_key, API_SECRET_KEY):
         raise HTTPException(status_code=403, detail="Missing or invalid API key.")
+
+
+# ---------------------------------------------------------------------------
+# Model-tier quota fallback
+# ---------------------------------------------------------------------------
+
+
+def _validate_model_overrides(raw: str) -> dict[str, str]:
+    if not raw or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="model_overrides must be valid JSON.")
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="model_overrides must be a JSON object keyed by tier.")
+
+    validated: dict[str, str] = {}
+    for tier, model in parsed.items():
+        if tier not in TIER_CANDIDATES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown tier '{tier}'. Expected one of: {', '.join(TIER_CANDIDATES)}.",
+            )
+        allowed = {c["model"] for c in TIER_CANDIDATES[tier]}
+        if model not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{model}' is not an approved model for the {tier} tier. "
+                    f"Approved: {', '.join(sorted(allowed))}."
+                ),
+            )
+        validated[tier] = model
+    return validated
+
+
+def _quota_exhausted_payload(exc: GeminiQuotaExhausted) -> dict:
+    """The structured 429 body for a Gemini quota exhaustion."""
+    tier = exc.tier or "FAST"
+    label = TIER_LABELS[tier]
+    alternatives = [c for c in TIER_CANDIDATES[tier] if c["model"] != exc.model]
+    return {
+        "error_type": "gemini_quota_exhausted",
+        "tier": tier,
+        "tier_label": label,
+        "model_that_failed": exc.model,
+        "alternatives": alternatives,
+        "message": (
+            f"The {label.lower()} model has hit today's free usage limit. "
+            "Pick another option to continue, or try again after the limit resets."
+        ),
+    }
 
 HOLIDAY_CONFLICT_WINDOW_DAYS = 3
 # Display names only, for calendar-event labels — SUPPORTED_COUNTRIES (config.py) is
@@ -159,6 +214,13 @@ async def ingest_endpoint(file: UploadFile = File(...)):
 
 
 
+@app.exception_handler(GeminiQuotaExhausted)
+async def gemini_quota_exhausted_handler(request: Request, exc: GeminiQuotaExhausted):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": _quota_exhausted_payload(exc)},
+    )
+
 @app.get("/health")
 async def health_check():
     try:
@@ -178,12 +240,13 @@ async def delete_document_endpoint(filename: str):
     return {"deleted_chunks": count}
 
 
-@app.post("/run-agent", response_model=AgentResponse, dependencies=[Depends(require_api_key)])
+@app.post("/run-agent", dependencies=[Depends(require_api_key)])
 async def run_agent_endpoint(
     script_text: str = Form(...),
     task: TaskType = Form(...),
     session_id: str = Form(default="default"),
-    evaluate: bool = Form(default=False)
+    evaluate: bool = Form(default=False),
+    model_overrides: str = Form(default=""),
 ):
     if not check_rate_limit(session_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Please wait before submitting another request.")
@@ -194,6 +257,8 @@ async def run_agent_endpoint(
     check_toxicity = task not in (TaskType.greenlight, TaskType.analyze)
     if not check_query_safety(script_text, min_length=min_length, check_toxicity=check_toxicity):
         raise HTTPException(status_code=400, detail="Script text is too short or invalid.")
+
+    validated_overrides = _validate_model_overrides(model_overrides)
 
     cache_key = f"{task.value}:{script_text}"
     cached = cache_get(cache_key)
@@ -207,6 +272,7 @@ async def run_agent_endpoint(
         )
         return {"result_id": result_id, "task": task.value, "result": cached, "from_cache": True}
 
+    current_model_overrides.set(validated_overrides)
     state = await run_supervisor(script_text, task.value)
     result_id = record_run(
         task=task.value, script_text=script_text, result=state["result"],
@@ -216,7 +282,9 @@ async def run_agent_endpoint(
 
     eval_score = None
     if evaluate:
-        faith_result = score_faithfulness(script_text, state["result"])
+        faith_result = score_faithfulness(
+            script_text, state["result"]
+        )
         save_eval_record(task.value, faith_result.score)
         eval_score = faith_result.model_dump()
 
@@ -590,3 +658,21 @@ async def admin_delete_row_endpoint(table: str, row_id: str):
 
     logger.info(f"admin deleted {deleted['deleted_rows']} row(s) from {table} via id={row_id}")
     return {"table": table, "row_id": row_id, **deleted}
+
+
+# ---------------------------------------------------------------------------
+# Developer docs viewer
+# ---------------------------------------------------------------------------
+
+
+@app.get("/admin/docs", dependencies=[Depends(require_api_key), Depends(require_role("developer"))])
+async def admin_docs_endpoint():
+    return {"docs": doc_summary()}
+
+
+@app.get("/admin/docs/{key}", dependencies=[Depends(require_api_key), Depends(require_role("developer"))])
+async def admin_doc_endpoint(key: str):
+    text = get_doc_text(key)
+    if text is None:
+        raise HTTPException(status_code=404, detail=f"No doc '{key}'.")
+    return Response(content=text, media_type="text/markdown")

@@ -3,8 +3,17 @@
 // because it is multi-step.
 "use client";
 
-import { useState } from "react";
-import { AgentResponse, downloadResult, GreenlightVerdict, parseGreenlightVerdict, runAgent } from "@/lib/api";
+import { useState, useSyncExternalStore } from "react";
+import {
+  AgentResponse,
+  downloadResult,
+  GreenlightVerdict,
+  parseGreenlightVerdict,
+  QuotaExhaustedDetail,
+  quotaExhaustedDetail,
+  runAgent,
+  simulateQuotaExceeded,
+} from "@/lib/api";
 import {
   Badge,
   BusyState,
@@ -16,11 +25,19 @@ import {
   InfoNote,
   PanelIntro,
   PrimaryButton,
+  QuotaDialog,
   SecondaryButton,
   errorMessage,
   inputClass,
 } from "@/components/ui";
 import { GENRES, GLOSSARY, MIN_SCRIPT_CHARS, PANEL_COPY, TASK_INFO } from "@/lib/content";
+import { isDemo } from "@/lib/demo";
+import {
+  getModelOverridesServerSnapshot,
+  getModelOverridesSnapshot,
+  rememberModelOverride,
+  subscribeModelOverrides,
+} from "@/lib/modelOverrides";
 
 type ScriptTask = "compliance" | "analyze" | "release_listing" | "greenlight";
 
@@ -97,6 +114,17 @@ export default function AgentsPanel({ onGo }: { onGo: (tab: string) => void }) {
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
+  const [quotaError, setQuotaError] = useState<QuotaExhaustedDetail | null>(null);
+  const [retrying, setRetrying] = useState(false);
+
+  // A model picked after an earlier quota-fallback dialog, remembered for
+  // the rest of this tab session so the very next run doesn't hit the same
+  // wall and re-prompt. Merged into every /run-agent call below.
+  const remembered = useSyncExternalStore(
+    subscribeModelOverrides,
+    getModelOverridesSnapshot,
+    getModelOverridesServerSnapshot
+  );
 
   const info = TASK_INFO[task];
   const isGenreTask = task === "release_listing";
@@ -117,17 +145,69 @@ export default function AgentsPanel({ onGo }: { onGo: (tab: string) => void }) {
     setTask(next);
     setResult(null);
     setError("");
+    setQuotaError(null);
   }
 
   async function run() {
     setLoading(true);
     setError("");
+    setQuotaError(null);
     setResult(null);
     try {
       const input = isGenreTask ? genre : scriptText;
-      setResult(await runAgent(input, task, sessionId || "default", evaluate));
+      setResult(await runAgent(input, task, sessionId || "default", evaluate, remembered));
     } catch (err) {
-      setError(errorMessage(err));
+      const quota = quotaExhaustedDetail(err);
+      if (quota) {
+        setQuotaError(quota);
+      } else {
+        setError(errorMessage(err));
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** Re-issue the identical action with the user-picked model for the tier that failed. */
+  async function retryWithModel(model: string) {
+    if (!quotaError) return;
+    setRetrying(true);
+    setError("");
+    try {
+      const input = isGenreTask ? genre : scriptText;
+      const overrides = { ...remembered, [quotaError.tier]: model };
+      setResult(await runAgent(input, task, sessionId || "default", evaluate, overrides));
+      rememberModelOverride(quotaError.tier, model);
+      setQuotaError(null);
+    } catch (err) {
+      const quota = quotaExhaustedDetail(err);
+      if (quota) {
+        setQuotaError(quota);
+      } else {
+        setError(errorMessage(err));
+        setQuotaError(null);
+      }
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  function stopQuotaFlow() {
+    setQuotaError(null);
+  }
+
+  /** Demo-Mode-only: triggers the rate-limit dialog with a canned fixture. */
+  async function runQuotaDemo() {
+    setLoading(true);
+    setError("");
+    setQuotaError(null);
+    setResult(null);
+    try {
+      await simulateQuotaExceeded();
+    } catch (err) {
+      const quota = quotaExhaustedDetail(err);
+      if (quota) setQuotaError(quota);
+      else setError(errorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -325,9 +405,23 @@ export default function AgentsPanel({ onGo }: { onGo: (tab: string) => void }) {
                 Takes about {info.typicalWait.split("(")[0].trim()}. Nothing is saved outside this app.
               </p>
             )}
+            {isDemo() && (
+              <button
+                type="button"
+                onClick={runQuotaDemo}
+                disabled={loading}
+                className="press w-full text-center text-xs text-amber-300/70 underline underline-offset-2 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                See what a usage limit looks like →
+              </button>
+            )}
           </div>
 
-          {error && <ErrorAlert message={error} />}
+          {quotaError ? (
+            <QuotaDialog detail={quotaError} onPick={retryWithModel} onStop={stopQuotaFlow} busy={retrying} />
+          ) : (
+            error && <ErrorAlert message={error} />
+          )}
         </Card>
       </div>
 

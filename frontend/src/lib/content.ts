@@ -1,4 +1,4 @@
-// Every piece of explanatory copy in the UI lives here, so the wording that tells
+﻿// Every piece of explanatory copy in the UI lives here, so the wording that tells
 // a user what to do stays in one place instead of being scattered through JSX.
 //
 // The values in GENRES and the min-length rules mirror the backend. If the
@@ -1249,3 +1249,100 @@ export const WALKTHROUGHS: Record<
     ],
   },
 };
+
+// ---- Model quality tiers ---------------------------------------------------
+// Mirrors config.py::TIER_MODELS / TIER_CANDIDATES / TIER_LABELS — same
+// models, same descriptions verbatim. Used by DocsPanel, ModelsPanel, and
+// the quota-fallback dialog.
+
+export type ModelTier = "FAST" | "STANDARD" | "QUALITY";
+
+export const TIER_LABELS: Record<ModelTier, string> = {
+  FAST: "Quick checks",
+  STANDARD: "Everyday reports",
+  QUALITY: "Final judgment",
+};
+
+export const TIER_DEFAULT_MODELS: Record<ModelTier, string> = {
+  FAST: "gemini-3.5-flash-lite",
+  STANDARD: "gemini-3.5-flash",
+  QUALITY: "gemini-3.7-flash",
+};
+
+export interface TierCandidate {
+  model: string;
+  description: string;
+}
+
+export const TIER_CANDIDATES: Record<ModelTier, TierCandidate[]> = {
+  FAST: [
+    {
+      model: TIER_DEFAULT_MODELS.FAST,
+      description:
+        "Fastest and cheapest — best when you're running many quick checks, like sorting an uploaded document or scoring search results.",
+    },
+    {
+      model: "gemini-2.5-flash-lite",
+      description:
+        "An older, equally fast option — free today, but Google has flagged the whole 2.5 model family for shutdown around mid-October 2026, so treat this as a temporary fallback, not a long-term choice.",
+    },
+  ],
+  STANDARD: [
+    {
+      model: TIER_DEFAULT_MODELS.STANDARD,
+      description:
+        "Balanced speed and quality — the right choice for everyday reports and write-ups you'll read yourself.",
+    },
+    {
+      model: "gemini-3.6-flash",
+      description:
+        "A newer alternative, reportedly a bit more efficient at planning multi-step content than 3.5 Flash — worth trying if you want slightly sharper write-ups without moving to the slowest tier.",
+    },
+    {
+      model: "gemini-2.5-flash",
+      description:
+        "An older mid-tier option — free today, but part of the 2.5 family Google has flagged for shutdown around mid-October 2026; use only as a temporary fallback.",
+    },
+  ],
+  QUALITY: [
+    {
+      model: TIER_DEFAULT_MODELS.QUALITY,
+      description:
+        "The most capable free option available — slower, but best for the one decision in a run you most want to trust, like the final greenlight verdict.",
+    },
+    {
+      model: "gemini-2.5-pro",
+      description:
+        "Previously Google's top reasoning model — still free today, but scheduled for shutdown around mid-October 2026 per multiple reports; don't build a habit around it this close to its retirement.",
+    },
+  ],
+};
+
+/** Copy for the reactive rate-limit fallback dialog (ui.tsx::QuotaDialog). */
+export const QUOTA_DIALOG_COPY = {
+  title: "This model has hit today's usage limit",
+  stopHere: "Stop here",
+  retrying: "Trying again…",
+  ingestNote:
+    "Retrying this upload with a different model needs a developer to change it in the Models panel first — there is no one-click swap for this action.",
+} as const;
+
+// ---- Developer docs copy ---------------------------------------------------
+// Key + title pairs mirror DOC_REGISTRY in app/core/docs_registry.py.
+// The markdown content itself is never duplicated here — it is fetched fresh
+// from GET /admin/docs/{key} on every view.
+
+export const DOCS_COPY = {
+  title: "Developer docs",
+  intro:
+    "Architecture decisions, project guide, and test documentation — read fresh from the repo on every view, never a stale build-time copy.",
+  loading: "Loading…",
+  empty: "This document appears to be empty.",
+  docs: [
+    { key: "readme", title: "README" },
+    { key: "architecture", title: "Architecture" },
+    { key: "project-guide", title: "Project Guide" },
+    { key: "testing-guide", title: "Testing Guide" },
+    { key: "test-plan", title: "Test Plan" },
+  ],
+} as const;
