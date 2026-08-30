@@ -58,8 +58,8 @@ def process_and_insert(collection: str, chunks_data: list[tuple[str, dict]]):
         insert_document(collection, text, metadata, all_embeddings[i])
 
 def ingest_all():
-    print("Clearing all old documents...")
-    _execute("DELETE FROM documents")
+    print("Clearing old help documentation...")
+    _execute("DELETE FROM documents WHERE collection IN ('client_help', 'admin_help')")
 
     root_dir = Path(__file__).parent.parent
     

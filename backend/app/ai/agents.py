@@ -257,11 +257,15 @@ def check_release_conflicts(genre: str, proposed_date: str, listing_text: str) -
 
     return "\n".join(lines)
 
+_cached_agent_card = None
 
 async def check_conflicts_via_a2a(date_str: str) -> dict:
+    global _cached_agent_card
     async with httpx.AsyncClient() as httpx_client:
-        agent_card = await A2ACardResolver(httpx_client, AGENT4_BASE_URL).get_agent_card()
-        client = A2AClient(httpx_client, agent_card=agent_card)
+        if _cached_agent_card is None:
+            _cached_agent_card = await A2ACardResolver(httpx_client, AGENT4_BASE_URL).get_agent_card()
+            
+        client = A2AClient(httpx_client, agent_card=_cached_agent_card)
 
         request = SendMessageRequest(
             id=str(uuid4()),
