@@ -115,10 +115,10 @@ cd tests/frontend && node --experimental-strip-types demo.test.ts
   `tests/backend/test_*.py` automatically ΓÇö no edit to the script needed.
 - Frontend: extend `tests/frontend/demo.test.ts` (or add a sibling
   `tests/frontend/*.test.ts` and wire it into `run_tests.sh`'s
-  `run_frontend_unit` step ΓÇö there's only one file today, so the step is
+  `run_frontend_unit` step — there's only one file today, so the step is
   hardcoded to it).
 - Before adding a new check, grep the existing files for the behavior first
-  (`grep -h "^def test_" tests/backend/test_*.py`) ΓÇö don't duplicate a case
+  (`grep -h "^def test_" tests/backend/test_*.py`) — don't duplicate a case
   that already exists under a different name.
 
 ## Known stale doc references

@@ -103,7 +103,11 @@ export default function MermaidDiagram({ source }: { source: string }) {
 
     return () => {
       destroyed = true;
-      instance?.destroy();
+      try {
+        instance?.destroy();
+      } catch (e) {
+        console.warn("svg-pan-zoom destroy error (ignoring):", e);
+      }
       panZoomRef.current = null;
     };
   }, [svg]);

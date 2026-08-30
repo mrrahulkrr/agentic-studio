@@ -23,6 +23,7 @@ from app.core.auth import (
     hash_password, require_role, verify_password,
 )
 from app.data.ingest import ingest_document
+from app.data.retrieval import hybrid_search
 from app.ai.supervisor import run_supervisor
 from app.ai.agents import resolve_genre_from_listing, check_conflicts_via_a2a
 from app.core.guardrails import check_query_safety
@@ -676,3 +677,52 @@ async def admin_doc_endpoint(key: str):
     if text is None:
         raise HTTPException(status_code=404, detail=f"No doc '{key}'.")
     return Response(content=text, media_type="text/markdown")
+
+
+# ---------------------------------------------------------------------------
+# Assistants
+# ---------------------------------------------------------------------------
+
+@app.post("/assist/client", dependencies=[Depends(get_current_user)])
+async def assist_client_endpoint(query: str = Body(..., embed=True), session_id: str = Body(default="default", embed=True)):
+    if not check_rate_limit(session_id):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+        
+    results = hybrid_search(query, collection="client_help", top_k=3)
+    context = "\n\n".join(r['text'] for r in results)
+    
+    system_prompt = f"""You are the Agentic Studio Client Assistant. Use the following studio context to answer the user's query.
+
+{context}
+
+IMPORTANT: 
+1. Always format your responses using bullet points or numbered lists for readability.
+2. If explaining a workflow, generate Mermaid diagrams. When creating mermaid diagrams, ALWAYS quote node labels that contain special characters, for example: `A["1. Pick a Genre"] --> B["2. Next Step"]`. NEVER use markdown links inside mermaid node definitions.
+3. If you mention a specific page or feature, ALWAYS include a Markdown link so the user can navigate there. Use strict standard Markdown link syntax: `[Link Text](#tab-TabName)`. Do NOT duplicate the link text or add extra parentheses. Examples: `[Go to Dashboard](#tab-Dashboard)`.
+4. Do NOT attempt to answer questions about the internal codebase or database schemas. You are an admin guide, not a code oracle.
+"""
+    
+    response_text = generate_for_tier("FAST", system_prompt, query)
+    return {"response": response_text}
+
+@app.post("/assist/developer", dependencies=[Depends(get_current_user), Depends(require_role("developer"))])
+async def assist_developer_endpoint(query: str = Body(..., embed=True), session_id: str = Body(default="default", embed=True)):
+    if not check_rate_limit(session_id):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+        
+    results = hybrid_search(query, collection="admin_help", top_k=5)
+    context = "\n\n".join(r['text'] for r in results)
+    
+    system_prompt = f"""You are the Agentic Studio Admin Assistant. Use the following admin context to answer the user's query.
+
+{context}
+
+IMPORTANT: 
+1. Always format your responses using bullet points or numbered lists for readability.
+2. If explaining a workflow or architecture, generate Mermaid diagrams. When creating mermaid diagrams, ALWAYS quote node labels that contain special characters, for example: `A["1. Pick a Genre"] --> B["2. Next Step"]`. NEVER use markdown links inside mermaid node definitions.
+3. If you mention a specific feature or tab, ALWAYS include a Markdown link so the user can navigate there. Use strict standard Markdown link syntax: `[Link Text](#tab-TabName)`. Do NOT duplicate the link text or add extra parentheses. Examples: `[Go to Agents](#tab-Agents)` or `[Go to Evals](#tab-Evals)`.
+4. Do NOT attempt to answer questions about the internal codebase or database schemas. You are an admin guide, not a code oracle.
+"""
+    
+    response_text = generate_for_tier("FAST", system_prompt, query)
+    return {"response": response_text}

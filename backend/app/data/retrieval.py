@@ -83,7 +83,9 @@ def hybrid_search(query: str, collection: str = None, top_k: int = 3, candidate_
     bm25_scores = np.array([c["bm25_score"] for c in candidate_list])
     dense_norm = dense_scores / (dense_scores.max() + 1e-9)
     bm25_norm = bm25_scores / (bm25_scores.max() + 1e-9)
-    combined = 0.6 * dense_norm + 0.4 * bm25_norm
+    dense_weight = 0.8 if collection == 'dev_code' else 0.6
+    bm25_weight = 0.2 if collection == 'dev_code' else 0.4
+    combined = dense_weight * dense_norm + bm25_weight * bm25_norm
 
     for i, c in enumerate(candidate_list):
         c["hybrid_score"] = float(combined[i])

@@ -587,3 +587,14 @@ export function getEvalChart() {
 }
 
 export { ApiError };
+
+export async function askAssistant(variant: "client" | "developer", query: string, sessionId: string = "default"): Promise<string> {
+  if (isDemo()) {
+    return `[Demo Mode] Simulated response for ${variant} query: "${query}". See [src/app/page.tsx:L1] for details.`;
+  }
+  return request<{ response: string }>(`/assist/${variant}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, session_id: sessionId }),
+  }).then(res => res.response);
+}

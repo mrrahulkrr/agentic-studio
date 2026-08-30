@@ -36,7 +36,7 @@ DOC_REGISTRY: dict[str, dict] = {
     },
     "architecture": {
         "title": "Architecture",
-        "path": _BACKEND_ROOT / "ARCHITECTURE.md",
+        "path": REPO_ROOT / "ARCHITECTURE.md",
     },
     "project-guide": {
         "title": "Project Guide",
@@ -44,11 +44,11 @@ DOC_REGISTRY: dict[str, dict] = {
     },
     "testing-guide": {
         "title": "Testing Guide",
-        "path": REPO_ROOT / "tests" / "TESTING_GUIDE.md",
+        "path": REPO_ROOT / "TESTING_GUIDE.md",
     },
     "test-plan": {
         "title": "Test Plan",
-        "path": REPO_ROOT / "tests" / "TEST_PLAN.md",
+        "path": REPO_ROOT / "TEST_PLAN.md",
     },
 }
 

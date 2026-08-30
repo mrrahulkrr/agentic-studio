@@ -54,6 +54,25 @@ def embed_text(text: str, max_retries: int = 3) -> list[float]:
             time.sleep(2 ** attempt)
 
 
+def embed_batch(texts: list[str], max_retries: int = 5) -> list[list[float]]:
+    if not texts:
+        return []
+        
+    for attempt in range(max_retries):
+        try:
+            response = _client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=texts,
+                config=types.EmbedContentConfig(output_dimensionality=768),
+            )
+            return [e.values for e in response.embeddings]
+        except Exception:
+            if attempt == max_retries - 1:
+                raise
+            # Gemini free tier strict RPM limit, wait 65 seconds to let the per-minute quota fully reset
+            time.sleep(65)
+
+
 def generate_text(
     system_prompt: str,
     user_prompt: str,

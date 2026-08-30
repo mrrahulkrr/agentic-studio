@@ -14,7 +14,7 @@ The frontend is now **two** separate Next.js apps instead of one, and the backen
 - **`frontend/` restructured**: `packages/core` (shared code, not an npm package — see `frontend/packages/core/README.md`) plus `apps/client` (the working pipelines) and `apps/admin` (client's tabs + Database + API Log + Users). Both gate on login via `useSession()`; the admin app additionally checks `role === "developer"`.
 - **The API key no longer reaches the browser.** Both apps proxy every backend call through their own `app/api/proxy/[...path]/route.ts`, which attaches `X-API-Key` server-side from a non-public `BACKEND_API_KEY` env var. `NEXT_PUBLIC_API_KEY`/`NEXT_PUBLIC_API_URL` are gone from the codebase, replaced by `BACKEND_API_KEY`/`BACKEND_API_URL`.
 - **First account**: `python backend/seed_admin.py you@studio.com` — there is no signup page; every account after the first comes from the developer app's Users tab.
-- Checks: `python backend/test_auth.py` (11 checks — password hashing, session token roundtrip/tamper, role-gate 401/403/pass including DB-recheck-on-downgrade and deleted-account cases), alongside the two pre-existing backend suites and the frontend's `demo.test.ts` (now run from `frontend/packages/core`).
+- Checks: `./run_tests.sh` runs `tests/backend/test_auth.py` (11 checks — password hashing, session token roundtrip/tamper, role-gate 401/403/pass including DB-recheck-on-downgrade and deleted-account cases), alongside the other backend suites and the frontend's `demo.test.ts` (now run from `tests/frontend`).
 
 Everything below this point that says "the frontend" in the singular predates this split — read it as describing shared behavior both apps still have, and check the two bullet points above (auth endpoints, two apps) for what's actually different. The [Folder and File Structure](#folder-and-file-structure), [API endpoints](#api-endpoints), and [Client-side features](#client-side-features) sections have been updated in place; the rest has not been re-audited against this change line by line.
 
@@ -44,7 +44,7 @@ None of that came from changing the AI. The logic was already 0.025 ms; the time
 
 - Dead code deleted — see [Dead code](#dead-code-removed-august-2026). Requires a manual `ALTER TABLE` on existing databases.
 - Frontend rewritten for first-time users: a "Start here" tab, a guided four-step Release Planner replacing the hidden result-ID handoff, and per-task explanations of what each agent needs and returns. Split from one 980-line `page.tsx` into `components/` plus `lib/content.ts`.
-- First tests in the repo: `test_release_conflicts.py`, 15 checks, no framework needed.
+- First tests in the repo: `tests/backend/test_release_conflicts.py`, 15 checks, no framework needed.
 
 **Frontend features added on top of `lib/api.ts`**
 
@@ -57,7 +57,7 @@ Every backend call already went through one `request<T>` helper, so all four of 
 | **Activity feed** | `lib/activity.ts`, `components/ActivityFeed.tsx` | Transient plain-language narration — "Searching the guidelines you uploaded…" → "Compliance report ready." Outcome lines are computed from the real response. |
 | **API log** | `lib/apilog.ts`, `components/ApiLogPanel.tsx` | Technical drawer: method, endpoint, payload, status, response, per call. Demo calls included and flagged `simulated`. The API key is masked everywhere it could print. |
 
-- Second test file, first on the frontend: `frontend/lib/demo.test.ts`, run with bare `node`.
+- Second test file, first on the frontend: `tests/frontend/demo.test.ts`, run with bare `node`.
 
 **Known-unfixed** issues are listed in `ARCHITECTURE.md` under Known limitations — most importantly `bm25_search` rebuilding its index from every row on every query, and `ingest.py` classifying per chunk rather than per document.
 

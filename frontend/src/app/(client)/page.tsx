@@ -5,6 +5,7 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { HelpChat } from "@/components/HelpChat";
 import { checkHealth, logout } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import {
@@ -160,6 +161,8 @@ export default function Home() {
                   : SHELL_COPY.health.offline}
               </div>
             )}
+            
+            <HelpChat variant="client" />
 
             {!demo && (
               <button
