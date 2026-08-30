@@ -6,6 +6,9 @@ from app.core.resilience import logger
 import numpy as np
 
 
+from app.ai.evaluator import _parse_json_response
+
+
 def gemini_rerank(query: str, candidates: list[dict]) -> list[dict]:
     """Score each candidate 0-10 for absolute relevance to the query.
 
@@ -39,7 +42,8 @@ Documents:
             temperature=0.0,
             response_json=True,
         )
-        scores = json.loads(response).get("scores", [])
+        parsed = _parse_json_response(response)
+        scores = parsed.get("scores", [])
         if len(scores) != len(candidates):
             raise ValueError(
                 f"reranker returned {len(scores)} scores for {len(candidates)} documents"
