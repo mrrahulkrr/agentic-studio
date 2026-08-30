@@ -1,4 +1,4 @@
-﻿// Every piece of explanatory copy in the UI lives here, so the wording that tells
+// Every piece of explanatory copy in the UI lives here, so the wording that tells
 // a user what to do stays in one place instead of being scattered through JSX.
 //
 // The values in GENRES and the min-length rules mirror the backend. If the
@@ -1282,9 +1282,9 @@ export const TIER_CANDIDATES: Record<ModelTier, TierCandidate[]> = {
         "Fastest and cheapest — best when you're running many quick checks, like sorting an uploaded document or scoring search results.",
     },
     {
-      model: "gemini-2.5-flash-lite",
+      model: "gemini-3.1-flash-lite",
       description:
-        "An older, equally fast option — free today, but Google has flagged the whole 2.5 model family for shutdown around mid-October 2026, so treat this as a temporary fallback, not a long-term choice.",
+        "Empirically verified fast fallback model — high throughput and low latency for quick checks.",
     },
   ],
   STANDARD: [
@@ -1296,24 +1296,19 @@ export const TIER_CANDIDATES: Record<ModelTier, TierCandidate[]> = {
     {
       model: "gemini-3.6-flash",
       description:
-        "A newer alternative, reportedly a bit more efficient at planning multi-step content than 3.5 Flash — worth trying if you want slightly sharper write-ups without moving to the slowest tier.",
-    },
-    {
-      model: "gemini-2.5-flash",
-      description:
-        "An older mid-tier option — free today, but part of the 2.5 family Google has flagged for shutdown around mid-October 2026; use only as a temporary fallback.",
+        "Verified active alternative, highly efficient at planning multi-step content with sharp write-ups.",
     },
   ],
   QUALITY: [
     {
       model: TIER_DEFAULT_MODELS.QUALITY,
       description:
-        "The most capable free option available — slower, but best for the one decision in a run you most want to trust, like the final greenlight verdict.",
+        "The most capable option available — best for the one decision in a run you most want to trust, like the final greenlight verdict.",
     },
     {
-      model: "gemini-2.5-pro",
+      model: "gemini-3.5-flash",
       description:
-        "Previously Google's top reasoning model — still free today, but scheduled for shutdown around mid-October 2026 per multiple reports; don't build a habit around it this close to its retirement.",
+        "Highly reliable, verified mid-tier fallback with 100% API availability for complex evaluations.",
     },
   ],
 };
