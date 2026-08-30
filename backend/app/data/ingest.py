@@ -1,5 +1,9 @@
+import re
+
 from app.core.llm import embed_text, generate_for_tier
 from app.data.database import document_exists, insert_document
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
 
@@ -39,16 +43,39 @@ def classify_chunk(chunk_text: str) -> str:
     return classify_document(chunk_text)
 
 
-def chunk_text(text: str, words_per_chunk: int = 300, overlap: int = 50) -> list[str]:
-    words = text.split()
-    chunks = []
-    step = words_per_chunk - overlap
+def chunk_text(text: str, words_per_chunk: int = 300, overlap_sentences: int = 2) -> list[str]:
+    """Pack whole sentences into ~words_per_chunk-word chunks instead of
+    slicing by raw word count. A blind word-count slice can (and, on the
+    Cinematograph Act PDF, did) cut a chunk boundary through the middle of a
+    legal clause and glue half of it onto an unrelated following section,
+    diluting the one part of the document that was actually relevant to a
+    compliance query.
 
-    for i in range(0, len(words), step):
-        chunk = " ".join(words[i:i + words_per_chunk])
-        chunks.append(chunk)
-        if i + words_per_chunk >= len(words):
-            break
+    Overlap is carried as the last `overlap_sentences` complete sentences of
+    one chunk, not a word count, so context still crosses the boundary
+    without ever splitting a sentence across two chunks. A single sentence
+    longer than words_per_chunk becomes its own oversized chunk rather than
+    being cut — matches the same "never mid-clause" rule.
+    """
+    sentences = [s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()]
+    if not sentences:
+        return []
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_words = 0
+
+    for sentence in sentences:
+        sentence_words = len(sentence.split())
+        if current and current_words + sentence_words > words_per_chunk:
+            chunks.append(" ".join(current))
+            current = current[-overlap_sentences:]
+            current_words = sum(len(s.split()) for s in current)
+        current.append(sentence)
+        current_words += sentence_words
+
+    if current:
+        chunks.append(" ".join(current))
 
     return chunks
 

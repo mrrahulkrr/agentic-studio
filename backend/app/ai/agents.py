@@ -58,17 +58,13 @@ For each one, state what guideline topic to check (e.g. "graphic violence rules"
             "knowledge base. Manual review recommended."
         )
 
-    if status == "low_relevance":
-        return (
-            "Guidelines were searched, but none were relevant enough to this content to "
-            "cite responsibly. Manual review recommended."
-        )
-
     context = "\n".join(f"- {m['text']}" for m in guideline_matches)
 
-    # "unscored" means documents were retrieved but the reranker could not rank
-    # them. Reporting them with a caveat beats claiming nothing was found, which
-    # is what the old boolean gate did on every reranker failure.
+    # "unscored" means the reranker couldn't score candidates at all; "low_relevance"
+    # means it scored them and none cleared the confidence threshold. Both still have
+    # real retrieved text — a caveated best-effort report beats a bare refusal, as
+    # long as the caveat is honest about which case this is. Only "empty" (nothing
+    # retrieved at all) has nothing to report and refuses above.
     caveat = ""
     if status == "unscored":
         logger.warning("Compliance report generated without relevance scoring")
@@ -76,6 +72,14 @@ For each one, state what guideline topic to check (e.g. "graphic violence rules"
             "\n\nNote: automatic relevance ranking was unavailable for this report, so "
             "the guidelines quoted above may be less closely matched than usual. "
             "Verify each citation before acting on it."
+        )
+    elif status == "low_relevance":
+        logger.warning("Compliance report generated from below-threshold guideline matches")
+        caveat = (
+            "\n\nNote: the closest guideline matches scored below our relevance threshold, "
+            "so they may not directly apply to this content. Treat the citations above as a "
+            "starting point only, and have a human reviewer confirm relevance before acting "
+            "on them."
         )
 
     final_prompt = f"""Script content flagged: {flagged_topics}
