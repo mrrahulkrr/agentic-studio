@@ -84,6 +84,14 @@ async def run_supervisor(script_text: str, task: str):
     return await graph.ainvoke(initial_state)
 
 
+# Producer/executive rounds allowed before the committee is forced to a verdict.
+# Only the round that hits this cap (or gets approved) uses the QUALITY model —
+# QUALITY is meant to be "called rarely" (see config.py), and burning it on every
+# interim revision round was exhausting the API quota on scripts that just took
+# a round or two of back-and-forth to settle.
+GREENLIGHT_MAX_ROUNDS = 2
+
+
 class CommitteeState(TypedDict, total=False):
     script_text: str
     script_digest: dict
@@ -159,12 +167,20 @@ def route_after_gatekeeper(state: CommitteeState) -> str:
 
 
 async def executive_node(state: CommitteeState) -> CommitteeState:
+    is_last_round = state.get("iteration_count", 0) >= GREENLIGHT_MAX_ROUNDS
+    tier = "QUALITY" if is_last_round else "STANDARD"
     review = executive_agent(
         state.get("script_digest", {}),
         state.get("producer_pitch", {}),
         state.get("compliance_data", {}),
-        state.get("date_conflict_data", {})
+        state.get("date_conflict_data", {}),
+        tier=tier,
     )
+
+    trace = state.get("trace", [])
+    trace.append(f"Executive review, round {state.get('iteration_count', 0)}, run on {tier} tier")
+    state["trace"] = trace
+
     if "executive_review" in state and state["executive_review"]:
         state["previous_concerns"] = state["executive_review"].get("concern_list", [])
     else:
@@ -184,7 +200,7 @@ def route_after_executive(state: CommitteeState) -> str:
     
     is_stalemate = current_concerns == previous_concerns and len(current_concerns) > 0
     
-    if is_stalemate or state.get("iteration_count", 0) >= 3:
+    if is_stalemate or state.get("iteration_count", 0) >= GREENLIGHT_MAX_ROUNDS:
         return "mediator_node"
     
     return "producer_node"

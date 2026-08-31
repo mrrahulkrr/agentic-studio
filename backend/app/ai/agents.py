@@ -265,7 +265,9 @@ _cached_agent_card = None
 
 async def check_conflicts_via_a2a(date_str: str) -> dict:
     global _cached_agent_card
-    async with httpx.AsyncClient() as httpx_client:
+    # Long timeout: Agent 4 runs on a free-tier host that spins down when idle,
+    # and a cold start alone can take 20-50s before it answers at all.
+    async with httpx.AsyncClient(timeout=60.0) as httpx_client:
         if _cached_agent_card is None:
             _cached_agent_card = await A2ACardResolver(httpx_client, AGENT4_BASE_URL).get_agent_card()
             
@@ -376,12 +378,13 @@ def executive_agent(
     producer_pitch: dict,
     compliance_data: dict,
     date_conflict_data: dict,
+    tier: str = "QUALITY",
 ) -> dict:
     prompt = f"Script digest: {json.dumps(script_digest)}\nProducer Pitch: {json.dumps(producer_pitch)}\nCompliance Data: {json.dumps(compliance_data)}\nDate Conflicts: {json.dumps(date_conflict_data)}\n"
     prompt += "Evaluate the pitch against the data. Output strict JSON with 'concern_list' (list of strings), 'is_approved' (boolean), and 'message' (string explaining the decision)."
 
     result = generate_for_tier(
-        "QUALITY", "You are a pragmatic studio executive. Output strict JSON.", prompt,
+        tier, "You are a pragmatic studio executive. Output strict JSON.", prompt,
         response_json=True,
     )
     try:
